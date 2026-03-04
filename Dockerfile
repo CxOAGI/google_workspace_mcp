@@ -15,6 +15,9 @@ COPY . .
 # Install Python dependencies using uv sync
 RUN uv sync --frozen --no-dev
 
+# Ensure .venv is world-readable and traversable so any runtime UID can access it
+RUN chmod -R a+rX /app/.venv
+
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash app \
     && chown -R app:app /app
