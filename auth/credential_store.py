@@ -13,6 +13,17 @@ from typing import Optional, List
 from datetime import datetime
 from google.oauth2.credentials import Credentials
 
+DEFAULT_SCOPES = [
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/documents",
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/presentations",
+    "https://www.googleapis.com/auth/forms.body",
+    "https://www.googleapis.com/auth/tasks",
+]
+
 logger = logging.getLogger(__name__)
 
 
@@ -236,6 +247,74 @@ class LocalDirectoryCredentialStore(CredentialStore):
 _credential_store: Optional[CredentialStore] = None
 
 
+def bootstrap_credentials_from_env() -> None:
+    """
+    Bootstrap credential file from environment variables for headless/container deployments.
+
+    If GOOGLE_REFRESH_TOKEN and USER_GOOGLE_EMAIL are set, writes a credential JSON file
+    to the credential store directory (only if the file does not already exist).
+    This allows the existing auth flow to pick up the credentials and refresh them on first use.
+    """
+    refresh_token = os.getenv("GOOGLE_REFRESH_TOKEN")
+    user_email = os.getenv("USER_GOOGLE_EMAIL")
+
+    if not refresh_token or not user_email:
+        return
+
+    # Resolve credentials directory using the same precedence as LocalDirectoryCredentialStore
+    workspace_creds_dir = os.getenv("WORKSPACE_MCP_CREDENTIALS_DIR")
+    google_creds_dir = os.getenv("GOOGLE_MCP_CREDENTIALS_DIR")
+
+    if workspace_creds_dir:
+        base_dir = os.path.expanduser(workspace_creds_dir)
+    elif google_creds_dir:
+        base_dir = os.path.expanduser(google_creds_dir)
+    else:
+        home_dir = os.path.expanduser("~")
+        if home_dir and home_dir != "~":
+            base_dir = os.path.join(home_dir, ".google_workspace_mcp", "credentials")
+        else:
+            base_dir = os.path.join(os.getcwd(), ".credentials")
+
+    cred_path = os.path.join(base_dir, f"{user_email}.json")
+
+    if os.path.exists(cred_path):
+        logger.info(
+            f"Credential file already exists for {user_email}, skipping env bootstrap"
+        )
+        return
+
+    # Resolve scopes from env or use defaults
+    scopes_env = os.getenv("GOOGLE_SCOPES")
+    if scopes_env:
+        scopes = [s.strip() for s in scopes_env.split(",") if s.strip()]
+    else:
+        scopes = list(DEFAULT_SCOPES)
+
+    client_id = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
+    client_secret = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "")
+
+    cred_data = {
+        "token": "",
+        "refresh_token": refresh_token,
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "scopes": scopes,
+        "expiry": "2020-01-01T00:00:00",
+    }
+
+    try:
+        os.makedirs(base_dir, exist_ok=True)
+        with open(cred_path, "w") as f:
+            json.dump(cred_data, f, indent=2)
+        logger.info(
+            f"Bootstrapped credentials from environment variables for {user_email}"
+        )
+    except OSError as e:
+        logger.error(f"Failed to bootstrap credentials from environment: {e}")
+
+
 def get_credential_store() -> CredentialStore:
     """
     Get the global credential store instance.
@@ -246,6 +325,7 @@ def get_credential_store() -> CredentialStore:
     global _credential_store
 
     if _credential_store is None:
+        bootstrap_credentials_from_env()
         # always use LocalJsonCredentialStore as the default
         # Future enhancement: support other backends via environment variables
         _credential_store = LocalDirectoryCredentialStore()
