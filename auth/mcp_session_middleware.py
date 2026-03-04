@@ -3,46 +3,56 @@ MCP Session Middleware
 
 This middleware intercepts MCP requests and sets the session context
 for use by tool functions.
+
+Uses pure ASGI protocol instead of BaseHTTPMiddleware to avoid
+interfering with streaming responses (SSE) used by the streamable-http
+MCP transport.  BaseHTTPMiddleware buffers the entire response body
+before forwarding it, which blocks SSE streams and causes MCP client
+``initialize()`` calls to time out — leaving unclosed aiohttp sessions.
 """
 
 import logging
-from typing import Callable, Any
 
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from auth.oauth21_session_store import (
     SessionContext,
     SessionContextManager,
     extract_session_from_headers,
 )
-# OAuth 2.1 is now handled by FastMCP auth
 
 logger = logging.getLogger(__name__)
 
 
-class MCPSessionMiddleware(BaseHTTPMiddleware):
+class MCPSessionMiddleware:
     """
-    Middleware that extracts session information from requests and makes it
-    available to MCP tool functions via context variables.
+    Pure ASGI middleware that extracts session information from MCP requests
+    and makes it available to tool functions via context variables.
     """
 
-    async def dispatch(self, request: Request, call_next: Callable) -> Any:
-        """Process request and set session context."""
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
 
-        logger.debug(
-            f"MCPSessionMiddleware processing request: {request.method} {request.url.path}"
-        )
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
 
-        # Skip non-MCP paths
-        if not request.url.path.startswith("/mcp"):
-            logger.debug(f"Skipping non-MCP path: {request.url.path}")
-            return await call_next(request)
+        path = scope.get("path", "")
+        if not path.startswith("/mcp"):
+            await self.app(scope, receive, send)
+            return
+
+        logger.debug("MCPSessionMiddleware processing request: %s %s", scope.get("method", ""), path)
 
         session_context = None
 
         try:
-            # Extract session information
+            # Build a lightweight Request to read headers and state from scope.
+            # This does NOT consume the request body.
+            request = Request(scope)
+
             headers = dict(request.headers)
             session_id = extract_session_from_headers(headers)
 
@@ -81,8 +91,8 @@ class MCPSessionMiddleware(BaseHTTPMiddleware):
                     auth_context=auth_context,
                     request=request,
                     metadata={
-                        "path": request.url.path,
-                        "method": request.method,
+                        "path": path,
+                        "method": scope.get("method", ""),
                         "user_email": user_email,
                         "mcp_session_id": mcp_session_id,
                     },
@@ -90,15 +100,14 @@ class MCPSessionMiddleware(BaseHTTPMiddleware):
 
                 logger.debug(
                     f"MCP request with session: session_id={session_context.session_id}, "
-                    f"user_id={session_context.user_id}, path={request.url.path}"
+                    f"user_id={session_context.user_id}, path={path}"
                 )
 
-            # Process request with session context
-            with SessionContextManager(session_context):
-                response = await call_next(request)
-                return response
-
         except Exception as e:
-            logger.error(f"Error in MCP session middleware: {e}")
-            # Continue without session context
-            return await call_next(request)
+            logger.error(f"Error extracting session info in MCP middleware: {e}")
+
+        # Process request with session context (or None on extraction failure).
+        # The downstream app receives raw scope/receive/send so SSE streams
+        # are forwarded without buffering.
+        with SessionContextManager(session_context):
+            await self.app(scope, receive, send)
