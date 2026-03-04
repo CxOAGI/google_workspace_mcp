@@ -22,6 +22,9 @@ DEFAULT_SCOPES = [
     "https://www.googleapis.com/auth/presentations",
     "https://www.googleapis.com/auth/forms.body",
     "https://www.googleapis.com/auth/tasks",
+    "https://www.googleapis.com/auth/chat.messages",
+    "https://www.googleapis.com/auth/chat.spaces",
+    "https://www.googleapis.com/auth/contacts.readonly",
 ]
 
 logger = logging.getLogger(__name__)
