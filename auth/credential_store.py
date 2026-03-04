@@ -14,17 +14,58 @@ from datetime import datetime
 from google.oauth2.credentials import Credentials
 
 DEFAULT_SCOPES = [
+    # Base / identity
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+    # Drive
     "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/drive.file",
+    # Gmail
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.labels",
+    "https://www.googleapis.com/auth/gmail.settings.basic",
+    # Calendar
     "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/calendar.events",
+    # Docs
     "https://www.googleapis.com/auth/documents",
+    "https://www.googleapis.com/auth/documents.readonly",
+    # Sheets
     "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/spreadsheets.readonly",
+    # Slides
     "https://www.googleapis.com/auth/presentations",
-    "https://www.googleapis.com/auth/forms.body",
-    "https://www.googleapis.com/auth/tasks",
+    "https://www.googleapis.com/auth/presentations.readonly",
+    # Chat
     "https://www.googleapis.com/auth/chat.messages",
+    "https://www.googleapis.com/auth/chat.messages.readonly",
     "https://www.googleapis.com/auth/chat.spaces",
+    "https://www.googleapis.com/auth/chat.spaces.readonly",
+    # Forms
+    "https://www.googleapis.com/auth/forms.body",
+    "https://www.googleapis.com/auth/forms.body.readonly",
+    "https://www.googleapis.com/auth/forms.responses.readonly",
+    # Tasks
+    "https://www.googleapis.com/auth/tasks",
+    "https://www.googleapis.com/auth/tasks.readonly",
+    # Contacts
+    "https://www.googleapis.com/auth/contacts",
     "https://www.googleapis.com/auth/contacts.readonly",
+    # Custom Search
+    "https://www.googleapis.com/auth/cse",
+    # Apps Script
+    "https://www.googleapis.com/auth/script.projects",
+    "https://www.googleapis.com/auth/script.projects.readonly",
+    "https://www.googleapis.com/auth/script.deployments",
+    "https://www.googleapis.com/auth/script.deployments.readonly",
+    "https://www.googleapis.com/auth/script.processes",
+    "https://www.googleapis.com/auth/script.metrics",
 ]
 
 logger = logging.getLogger(__name__)
