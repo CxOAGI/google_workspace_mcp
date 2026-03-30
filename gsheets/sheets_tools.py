@@ -19,6 +19,7 @@ from gsheets.sheets_helpers import (
     _a1_range_for_values,
     _build_boolean_rule,
     _build_gradient_rule,
+    _fetch_cell_formulas,
     _fetch_detailed_sheet_errors,
     _fetch_grid_metadata,
     _fetch_sheets_with_rules,
@@ -177,6 +178,7 @@ async def read_sheet_values(
     range_name: str = "A1:Z1000",
     include_hyperlinks: bool = False,
     include_notes: bool = False,
+    include_formulas: bool = False,
 ) -> str:
     """
     Reads values from a specific range in a Google Sheet.
@@ -189,6 +191,9 @@ async def read_sheet_values(
             Defaults to False to avoid expensive includeGridData requests.
         include_notes (bool): If True, also fetch cell notes for the range.
             Defaults to False to avoid expensive includeGridData requests.
+        include_formulas (bool): If True, also fetch raw formula strings for cells that
+            contain formulas. Useful for identifying cross-sheet references before writing
+            back to a range. Defaults to False to avoid an extra API request.
 
     Returns:
         str: The formatted values from the specified range.
@@ -220,6 +225,12 @@ async def read_sheet_values(
         include_notes=include_notes,
     )
 
+    formula_section = ""
+    if include_formulas:
+        formula_section = await _fetch_cell_formulas(
+            service, spreadsheet_id, resolved_range, values
+        )
+
     detailed_errors_section = ""
     if _values_contain_sheets_errors(values):
         try:
@@ -250,7 +261,7 @@ async def read_sheet_values(
     )
 
     logger.info(f"Successfully read {len(values)} rows for {user_google_email}.")
-    return text_output + hyperlink_section + notes_section + detailed_errors_section
+    return text_output + hyperlink_section + notes_section + formula_section + detailed_errors_section
 
 
 @server.tool()

@@ -961,6 +961,73 @@ def _format_sheet_notes_section(
     return f"\n\nCell notes in range '{range_label}':\n" + "\n".join(lines) + suffix
 
 
+async def _fetch_cell_formulas(
+    service,
+    spreadsheet_id: str,
+    resolved_range: str,
+    values: List[List[object]],
+) -> str:
+    """Fetch formula strings for cells in the given range.
+
+    Makes a second values().get() call with valueRenderOption="FORMULA" and
+    returns a formatted section listing any cells whose value starts with "=".
+    Cells containing plain values are silently skipped.
+
+    Returns an empty string if no formula cells are found or the request fails.
+    """
+    try:
+        result = await asyncio.to_thread(
+            service.spreadsheets()
+            .values()
+            .get(
+                spreadsheetId=spreadsheet_id,
+                range=resolved_range,
+                valueRenderOption="FORMULA",
+            )
+            .execute
+        )
+    except Exception as exc:
+        logger.warning(
+            "[read_sheet_values] Failed fetching formula values for range '%s': %s",
+            resolved_range,
+            exc,
+        )
+        return ""
+
+    formula_values = result.get("values", [])
+    formulas: list[dict[str, str]] = []
+    for row_idx, formula_row in enumerate(formula_values, 1):
+        for col_idx, cell_value in enumerate(formula_row):
+            if isinstance(cell_value, str) and cell_value.startswith("="):
+                col_label = _index_to_column(col_idx)
+                formulas.append({"cell": f"{col_label}{row_idx}", "formula": cell_value})
+
+    return _format_sheet_formula_section(formulas=formulas, range_label=resolved_range)
+
+
+def _format_sheet_formula_section(
+    *, formulas: list[dict[str, str]], range_label: str, max_details: int = 50
+) -> str:
+    """Format a list of formula cells into a human-readable section."""
+    if not formulas:
+        return ""
+
+    lines = []
+    for item in formulas[:max_details]:
+        cell = item.get("cell") or "(unknown cell)"
+        formula = item.get("formula") or "(empty formula)"
+        lines.append(f"- {cell}: {formula}")
+
+    suffix = (
+        f"\n... and {len(formulas) - max_details} more formula cells"
+        if len(formulas) > max_details
+        else ""
+    )
+    return (
+        f"\n\nFormula cells in range '{range_label}':\n" + "\n".join(lines) + suffix
+    )
+
+
 async def _fetch_grid_metadata(
     service,
     spreadsheet_id: str,
