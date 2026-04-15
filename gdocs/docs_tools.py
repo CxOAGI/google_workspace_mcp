@@ -33,7 +33,6 @@ from gdocs.docs_helpers import (
     create_insert_doc_tab_request,
     create_update_doc_tab_request,
     create_delete_doc_tab_request,
-    create_update_paragraph_style_request,
     validate_suggestions_view_mode,
     create_update_paragraph_style_request,
 )
@@ -441,7 +440,9 @@ async def modify_doc_text(
     Args:
         user_google_email: User's Google email address
         document_id: ID of the document to update
-        start_index: Start position for operation (0-based)
+        start_index: Start position for operation using Docs API indices from
+            inspect_doc_structure. For the main body, 0 is also accepted as an
+            alias for the first writable position.
         end_index: End position for text replacement/formatting (if not provided with text, text is inserted)
         text: New text to insert or replace with (optional - can format existing text without changing it)
         tab_id: Optional document tab ID to target
@@ -1078,12 +1079,37 @@ async def batch_update_doc(
       update_table_cell_style
                        - required: table_start_index (int)
                          optional: background_color, border_color, border_width,
+                                   padding_top, padding_bottom, padding_left,
+                                   padding_right (float, points),
+                                   content_alignment ("TOP"|"MIDDLE"|"BOTTOM"),
                                    row_index, column_index, row_span, column_span
                          Use inspect_doc_structure to find table_start_index from
                          table_details[].start_index. If row/column values are
                          omitted, the style is applied to the entire table.
       insert_table     - required: rows (int), columns (int)
                          optional: index (int), tab_id, segment_id, end_of_segment
+      insert_table_row - required: table_start_index (int), row_index (int)
+                         optional: insert_below (bool, default true), tab_id
+      delete_table_row - required: table_start_index (int), row_index (int)
+                         optional: tab_id
+      insert_table_column
+                       - required: table_start_index (int), column_index (int)
+                         optional: insert_right (bool, default true), tab_id
+      delete_table_column
+                       - required: table_start_index (int), column_index (int)
+                         optional: tab_id
+      merge_table_cells
+                       - required: table_start_index (int), row_index (int),
+                                   column_index (int), row_span (int), column_span (int)
+                         optional: tab_id
+      unmerge_table_cells
+                       - required: table_start_index (int), row_index (int),
+                                   column_index (int), row_span (int), column_span (int)
+                         optional: tab_id
+      update_table_column_properties
+                       - required: table_start_index (int), column_indices (list[int])
+                         optional: width (float, points), width_type
+                                   (FIXED_WIDTH|EVENLY_DISTRIBUTED), tab_id
       insert_page_break- optional: index (int), end_of_segment, tab_id
       insert_section_break
                        - optional: index (int), end_of_segment, section_type
@@ -1962,7 +1988,9 @@ async def update_paragraph_style(
     Args:
         user_google_email: User's Google email address
         document_id: Document ID to modify
-        start_index: Start position (1-based)
+        start_index: Start position using Docs API indices from
+            inspect_doc_structure. For the main body, 0 is also accepted as an
+            alias for the first writable position.
         end_index: End position (exclusive) - should cover the entire paragraph
         heading_level: Heading level 0-6 (0 = NORMAL_TEXT, 1 = H1, 2 = H2, etc.)
                        Use for semantic document structure
@@ -2017,8 +2045,8 @@ async def update_paragraph_style(
     )
 
     # Validate range
-    if start_index < 1:
-        return "Error: start_index must be >= 1"
+    if start_index < 0:
+        return "Error: start_index must be >= 0"
     if end_index <= start_index:
         return "Error: end_index must be greater than start_index"
 

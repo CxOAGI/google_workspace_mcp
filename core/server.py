@@ -25,7 +25,7 @@ from auth.oauth_responses import (
     create_server_error_response,
 )
 from auth.auth_info_middleware import AuthInfoMiddleware
-from auth.scopes import SCOPES, get_current_scopes  # noqa
+from auth.scopes import BASE_SCOPES, SCOPES, get_current_scopes  # noqa
 from core.config import (
     USER_GOOGLE_EMAIL,
     get_transport_mode,
@@ -209,7 +209,7 @@ def configure_server_for_http():
             return
 
         def validate_and_derive_jwt_key(
-            jwt_signing_key_override: str | None, client_secret: str
+            jwt_signing_key_override: str | None, client_secret: str | None
         ) -> bytes:
             """Validate JWT signing key override and derive the final JWT key."""
             if jwt_signing_key_override:
@@ -222,11 +222,15 @@ def configure_server_for_http():
                     low_entropy_material=jwt_signing_key_override,
                     salt="fastmcp-jwt-signing-key",
                 )
-            else:
+            if client_secret:
                 return derive_jwt_key(
                     high_entropy_material=client_secret,
                     salt="fastmcp-jwt-signing-key",
                 )
+            raise ValueError(
+                "Public client OAuth 2.1 requires FASTMCP_SERVER_AUTH_GOOGLE_JWT_SIGNING_KEY "
+                "when GOOGLE_OAUTH_CLIENT_SECRET is not set."
+            )
 
         try:
             # Import common dependencies for storage backends
@@ -234,7 +238,8 @@ def configure_server_for_http():
             from cryptography.fernet import Fernet
             from fastmcp.server.auth.jwt_issuer import derive_jwt_key
 
-            required_scopes: List[str] = sorted(get_current_scopes())
+            provider_valid_scopes: List[str] = sorted(get_current_scopes())
+            provider_required_scopes: List[str] = sorted(BASE_SCOPES)
 
             client_storage = None
             jwt_signing_key_override = (
@@ -458,7 +463,7 @@ def configure_server_for_http():
                     client_secret=config.client_secret,
                     base_url=config.get_oauth_base_url(),
                     redirect_path=config.redirect_path,
-                    required_scopes=required_scopes,
+                    required_scopes=provider_valid_scopes,
                     resource_server_url=config.get_oauth_base_url(),
                 )
                 server.auth = provider
@@ -477,10 +482,18 @@ def configure_server_for_http():
                     client_secret=config.client_secret,
                     base_url=config.get_oauth_base_url(),
                     redirect_path=config.redirect_path,
-                    required_scopes=required_scopes,
+                    required_scopes=provider_required_scopes,
+                    valid_scopes=provider_valid_scopes,
                     client_storage=client_storage,
                     jwt_signing_key=jwt_signing_key,
                 )
+                if provider.client_registration_options is not None:
+                    # Keep protocol-level auth limited to base identity scopes, but
+                    # allow dynamically registered MCP clients to request any scope
+                    # needed by enabled tools during subsequent authorization flows.
+                    provider.client_registration_options.default_scopes = (
+                        provider_valid_scopes
+                    )
                 # Enable protocol-level auth
                 server.auth = provider
                 logger.info(
