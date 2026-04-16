@@ -423,7 +423,9 @@ def test_build_params_default_is_detailed():
 
 def test_build_params_order_by_trims_surrounding_whitespace():
     """order_by is normalized before being sent to the Drive API."""
-    params = build_drive_list_params(query="q", page_size=5, order_by="  modifiedTime desc  ")
+    params = build_drive_list_params(
+        query="q", page_size=5, order_by="  modifiedTime desc  "
+    )
     assert params["orderBy"] == "modifiedTime desc"
 
 
