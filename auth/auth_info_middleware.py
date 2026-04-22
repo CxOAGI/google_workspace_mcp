@@ -71,7 +71,7 @@ class AuthInfoMiddleware(Middleware):
         if not authenticated_user:
             try:
                 # Use the new FastMCP method to get HTTP headers
-                headers = get_http_headers()
+                headers = get_http_headers(include={"authorization"})
                 logger.info(
                     f"[AuthInfoMiddleware] get_http_headers() returned: {headers is not None}, keys: {list(headers.keys()) if headers else 'None'}"
                 )
