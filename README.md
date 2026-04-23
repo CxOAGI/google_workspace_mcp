@@ -1433,25 +1433,45 @@ async def your_new_tool(service, param1: str, param2: int = 10):
 
 ### Credential Store System
 
-The server includes an abstract credential store API and a default backend for managing Google OAuth
-credentials with support for multiple storage backends:
+The server includes an abstract credential store API with pluggable backends for managing Google OAuth credentials:
 
 **Features:**
 - **Abstract Interface**: `CredentialStore` base class defines standard operations (get, store, delete, list users)
-- **Local File Storage**: `LocalDirectoryCredentialStore` implementation stores credentials as JSON files
-- **Configurable Storage**: Environment variable `GOOGLE_MCP_CREDENTIALS_DIR` sets storage location
+- **Local File Storage**: `LocalDirectoryCredentialStore` — plaintext JSON files protected by filesystem permissions (0o600 / 0o700)
+- **GCS-Backed Storage**: `GCSCredentialStore` — stores each user's credentials as an object in a Google Cloud Storage bucket. Supports atomic read-modify-write via generation preconditions, first-class Cloud IAM / Audit Logs integration, and transparent bucket-level CMEK encryption at rest
+- **Configurable Storage**: Environment variables select backend and location
 - **Multi-User Support**: Store and manage credentials for multiple Google accounts
-- **Automatic Directory Creation**: Storage directory is created automatically if it doesn't exist
+- **Automatic Directory Creation**: Storage directory is created automatically if it doesn't exist (local backend)
 
 **Configuration:**
 ```bash
-# Optional: Set custom credentials directory
+# Select backend (default: local_directory). Supported: local_directory, gcs
+export WORKSPACE_MCP_CREDENTIAL_STORE_BACKEND="gcs"
+
+# --- local_directory options ---
+export WORKSPACE_MCP_CREDENTIALS_DIR="/path/to/credentials"
+# Backward-compatible alias:
 export GOOGLE_MCP_CREDENTIALS_DIR="/path/to/credentials"
 
-# Default locations (if GOOGLE_MCP_CREDENTIALS_DIR not set):
+# Default directory locations (if no directory env var is set):
 # - ~/.google_workspace_mcp/credentials (if home directory accessible)
 # - ./.credentials (fallback)
+
+# --- gcs options ---
+export WORKSPACE_MCP_GCS_BUCKET="my-workspace-mcp-tokens"   # required
+export WORKSPACE_MCP_GCS_PREFIX="credentials/"              # optional
+export WORKSPACE_MCP_GCS_REQUIRE_CMEK="true"                # optional; see below
 ```
+
+**Backend selection:**
+- `local_directory` (default): Plaintext JSON records. Suitable for local development and single-user stdio mode.
+- `gcs`: Stores credentials as objects in a GCS bucket using the JSON API. Authenticates via Application Default Credentials — on Cloud Run this means the runtime service account needs `roles/storage.objectUser` (or equivalent) on the bucket. Does not support `list_users()` — designed for multi-user OAuth 2.1 mode where users are looked up individually by email.
+
+**CMEK enforcement (gcs backend):**
+
+By default GCS encrypts objects with Google-managed keys. For customer-managed encryption, set a default KMS key on the bucket (e.g. via Terraform's `google_storage_bucket.encryption.default_kms_key_name`). All credentials written to the bucket will inherit the key transparently — no application-level key to manage.
+
+To guard against accidentally deploying against a bucket without CMEK, set `WORKSPACE_MCP_GCS_REQUIRE_CMEK=true`. The store will verify the bucket has a default KMS key at startup and refuse to initialise otherwise.
 
 **Usage Example:**
 ```python

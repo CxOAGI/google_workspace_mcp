@@ -12,6 +12,8 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Optional, List
 from datetime import datetime
+from google.cloud import storage
+from google.cloud.exceptions import NotFound, PreconditionFailed
 from google.oauth2.credentials import Credentials
 
 logger = logging.getLogger(__name__)
@@ -249,6 +251,214 @@ class LocalDirectoryCredentialStore(CredentialStore):
         return sorted(users)
 
 
+class GCSCredentialStore(CredentialStore):
+    """Credential store backed directly by a Google Cloud Storage bucket.
+
+    Uses the GCS JSON API (not a gcsfuse mount) which provides:
+    - Atomic read-modify-write via generation preconditions (prevents lost
+      updates on concurrent token rotation).
+    - First-class integration with Cloud IAM, Cloud Audit Logs, and VPC-SC.
+    - Transparent bucket-level CMEK encryption at rest (no app-level key).
+
+    Confidentiality at rest is delegated to the bucket's encryption
+    configuration:
+    - Default: Google-managed encryption (always on, zero configuration).
+    - CMEK: Set the bucket's default_kms_key_name (e.g. via Terraform).
+      Every object inherits the key; no per-request configuration needed.
+
+    To guard against accidentally deploying against a bucket without CMEK,
+    set ``WORKSPACE_MCP_GCS_REQUIRE_CMEK=true``. The store will fail at
+    startup if the bucket has no default KMS key configured.
+
+    This backend does not support ``list_users()`` — it is designed for
+    multi-user OAuth 2.1 mode where users are looked up by email.
+
+    Configuration (env vars):
+        WORKSPACE_MCP_GCS_BUCKET         — bucket name (required)
+        WORKSPACE_MCP_GCS_PREFIX         — object prefix, default empty
+        WORKSPACE_MCP_GCS_REQUIRE_CMEK   — "true"/"1" to enforce CMEK
+    """
+
+    FILE_EXTENSION = ".json"
+
+    def __init__(
+        self,
+        bucket_name: Optional[str] = None,
+        prefix: Optional[str] = None,
+        require_cmek: Optional[bool] = None,
+    ):
+        bucket_name = bucket_name or os.getenv("WORKSPACE_MCP_GCS_BUCKET")
+        if not bucket_name:
+            raise ValueError(
+                "GCSCredentialStore requires a bucket name; "
+                "pass bucket_name or set WORKSPACE_MCP_GCS_BUCKET"
+            )
+        self.bucket_name = bucket_name
+
+        prefix = prefix if prefix is not None else os.getenv(
+            "WORKSPACE_MCP_GCS_PREFIX", ""
+        )
+        self.prefix = prefix.strip("/")
+        if self.prefix:
+            self.prefix += "/"
+
+        if require_cmek is None:
+            require_cmek = _parse_bool_env(
+                os.getenv("WORKSPACE_MCP_GCS_REQUIRE_CMEK", "")
+            )
+
+        self._client = storage.Client()
+        self._bucket = self._client.bucket(bucket_name)
+
+        if require_cmek:
+            self._verify_cmek()
+
+        logger.info(
+            f"GCSCredentialStore initialized with bucket={bucket_name}, "
+            f"prefix={self.prefix!r}, require_cmek={require_cmek}"
+        )
+
+    def _verify_cmek(self) -> None:
+        """Fetch bucket metadata and assert a default KMS key is configured.
+
+        Raises ValueError if the bucket exists but has no default_kms_key_name.
+        Raises the underlying google exception if the bucket does not exist.
+        """
+        self._bucket.reload()
+        if not self._bucket.default_kms_key_name:
+            raise ValueError(
+                f"GCSCredentialStore: bucket {self.bucket_name!r} has no "
+                f"default KMS key configured, but "
+                f"WORKSPACE_MCP_GCS_REQUIRE_CMEK is set. Either configure "
+                f"bucket.default_kms_key_name (e.g. via Terraform) or unset "
+                f"the requirement flag."
+            )
+        logger.info(
+            f"GCSCredentialStore: verified CMEK on bucket "
+            f"{self.bucket_name!r} (key={self._bucket.default_kms_key_name})"
+        )
+
+    def _blob_name(self, user_email: str) -> str:
+        """Construct the object key for a user, sanitising email for safety."""
+        safe_email = re.sub(r"[^a-zA-Z0-9@._-]", "_", user_email)
+        return f"{self.prefix}{safe_email}{self.FILE_EXTENSION}"
+
+    def get_credential(self, user_email: str) -> Optional[Credentials]:
+        """Download and deserialize credentials for a user."""
+        blob = self._bucket.blob(self._blob_name(user_email))
+        try:
+            raw = blob.download_as_bytes()
+        except NotFound:
+            logger.debug(f"No credentials object for {user_email}")
+            return None
+        except Exception as e:
+            logger.error(f"Error downloading credentials for {user_email}: {e}")
+            return None
+
+        try:
+            creds_data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            logger.error(f"Error parsing credentials for {user_email}: {e}")
+            return None
+
+        expiry = None
+        if creds_data.get("expiry"):
+            try:
+                expiry = datetime.fromisoformat(creds_data["expiry"])
+                if expiry.tzinfo is not None:
+                    expiry = expiry.replace(tzinfo=None)
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Could not parse expiry for {user_email}: {e}")
+
+        return Credentials(
+            token=creds_data.get("token"),
+            refresh_token=creds_data.get("refresh_token"),
+            token_uri=creds_data.get("token_uri"),
+            client_id=creds_data.get("client_id"),
+            client_secret=creds_data.get("client_secret"),
+            scopes=creds_data.get("scopes"),
+            expiry=expiry,
+        )
+
+    def store_credential(self, user_email: str, credentials: Credentials) -> bool:
+        """Serialize and upload credentials, using generation preconditions
+        to guarantee atomic read-modify-write under concurrent writers."""
+        creds_data = {
+            "token": credentials.token,
+            "refresh_token": credentials.refresh_token,
+            "token_uri": credentials.token_uri,
+            "client_id": credentials.client_id,
+            "client_secret": credentials.client_secret,
+            "scopes": credentials.scopes,
+            "expiry": credentials.expiry.isoformat() if credentials.expiry else None,
+        }
+        payload = json.dumps(creds_data).encode()
+
+        for attempt in range(3):
+            blob = self._bucket.blob(self._blob_name(user_email))
+            try:
+                blob.reload()
+                generation = blob.generation
+            except NotFound:
+                generation = 0  # must-not-exist precondition
+
+            try:
+                blob.upload_from_string(
+                    payload,
+                    content_type="application/json",
+                    if_generation_match=generation,
+                )
+                logger.info(f"Stored credentials for {user_email}")
+                return True
+            except PreconditionFailed:
+                logger.info(
+                    f"Concurrent write detected for {user_email}; "
+                    f"retrying (attempt {attempt + 1}/3)"
+                )
+                continue
+            except Exception as e:
+                logger.error(f"Error storing credentials for {user_email}: {e}")
+                return False
+
+        logger.error(
+            f"Failed to store credentials for {user_email} after 3 attempts"
+        )
+        return False
+
+    def delete_credential(self, user_email: str) -> bool:
+        """Delete a user's credentials object; idempotent."""
+        blob = self._bucket.blob(self._blob_name(user_email))
+        try:
+            blob.delete()
+            logger.info(f"Deleted credentials for {user_email}")
+            return True
+        except NotFound:
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting credentials for {user_email}: {e}")
+            return False
+
+    def list_users(self) -> List[str]:
+        """Not supported by this backend.
+
+        Designed for multi-user OAuth 2.1 mode where users are looked up
+        individually by email. Enumerating all users requires a bucket LIST
+        which is semantically wrong for that flow. Use
+        ``LocalDirectoryCredentialStore`` if you need single-user mode.
+        """
+        raise NotImplementedError(
+            "GCSCredentialStore does not support listing users. "
+            "This backend is designed for multi-user OAuth 2.1 mode where "
+            "users are looked up individually by email. Use "
+            "LocalDirectoryCredentialStore if you need single-user mode."
+        )
+
+
+def _parse_bool_env(value: str) -> bool:
+    """Parse a truthy env var value; defaults to False."""
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
 # Global credential store instance
 _credential_store: Optional[CredentialStore] = None
 
@@ -263,9 +473,11 @@ def get_credential_store() -> CredentialStore:
     global _credential_store
 
     if _credential_store is None:
-        # always use LocalJsonCredentialStore as the default
-        # Future enhancement: support other backends via environment variables
-        _credential_store = LocalDirectoryCredentialStore()
+        backend = os.getenv("WORKSPACE_MCP_CREDENTIAL_STORE_BACKEND", "").lower()
+        if backend == "gcs":
+            _credential_store = GCSCredentialStore()
+        else:
+            _credential_store = LocalDirectoryCredentialStore()
         logger.info(f"Initialized credential store: {type(_credential_store).__name__}")
 
     return _credential_store
