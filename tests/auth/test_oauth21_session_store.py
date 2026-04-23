@@ -108,9 +108,7 @@ def test_store_session_rejects_mcp_session_rebind_by_default(tmp_path):
         )
 
 
-def test_store_session_skips_mcp_binding_in_single_user_mode(
-    tmp_path, monkeypatch
-):
+def test_store_session_skips_mcp_binding_in_single_user_mode(tmp_path, monkeypatch):
     monkeypatch.setenv("MCP_SINGLE_USER_MODE", "1")
 
     state_file = tmp_path / "oauth_states.json"
