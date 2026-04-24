@@ -1472,6 +1472,7 @@ export WORKSPACE_MCP_GCS_REQUIRE_CMEK="true"                # optional; see belo
 
 **Backend selection:**
 - `local_directory` (default): Plaintext JSON records. Suitable for local development and single-user stdio mode.
+  Existing pre-URL-encoding local credential filenames remain readable during migration; new writes use the URL-encoded filename mapping unless a legacy file already exists for that user.
 - `gcs`: Stores credentials as objects in a GCS bucket using the JSON API. Authenticates via Application Default Credentials — on Cloud Run this means the runtime service account needs `roles/storage.objectUser` (or equivalent) on the bucket. Does not support `list_users()` — designed for multi-user OAuth 2.1 mode where users are looked up individually by email.
 
 **CMEK enforcement (gcs backend):**

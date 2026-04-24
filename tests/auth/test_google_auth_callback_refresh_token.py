@@ -16,6 +16,7 @@ class _DummyOAuthStore:
     def __init__(self, session_credentials=None):
         self._session_credentials = session_credentials
         self.stored_refresh_token = None
+        self.store_calls = 0
 
     def validate_and_consume_oauth_state(self, state, session_id=None):  # noqa: ARG002
         return {"session_id": session_id, "code_verifier": "verifier"}
@@ -27,20 +28,22 @@ class _DummyOAuthStore:
         return self._session_credentials
 
     def store_session(self, **kwargs):
+        self.store_calls += 1
         self.stored_refresh_token = kwargs.get("refresh_token")
 
 
 class _DummyCredentialStore:
-    def __init__(self, existing_credentials=None):
+    def __init__(self, existing_credentials=None, store_result=True):
         self._existing_credentials = existing_credentials
         self.saved_credentials = None
+        self.store_result = store_result
 
     def get_credential(self, user_email):  # noqa: ARG002
         return self._existing_credentials
 
     def store_credential(self, user_email, credentials):  # noqa: ARG002
         self.saved_credentials = credentials
-        return True
+        return self.store_result
 
 
 def _make_credentials(refresh_token):
@@ -170,3 +173,45 @@ async def test_callback_raises_when_google_rejects_pkce_verifier(monkeypatch):
             redirect_uri="http://localhost/callback",
             session_id="session-1",
         )
+
+
+@pytest.mark.asyncio
+async def test_callback_aborts_session_persistence_when_store_write_fails(monkeypatch):
+    callback_credentials = _make_credentials(refresh_token="callback-refresh-token")
+    oauth_store = _DummyOAuthStore(session_credentials=None)
+    credential_store = _DummyCredentialStore(
+        existing_credentials=None, store_result=False
+    )
+    session_cache_writes = []
+
+    monkeypatch.setattr(
+        "auth.google_auth.create_oauth_flow",
+        lambda **kwargs: _DummyFlow(callback_credentials),  # noqa: ARG005
+    )
+    monkeypatch.setattr(
+        "auth.google_auth.get_oauth21_session_store", lambda: oauth_store
+    )
+    monkeypatch.setattr(
+        "auth.google_auth.get_credential_store", lambda: credential_store
+    )
+    monkeypatch.setattr(
+        "auth.google_auth.get_user_info",
+        lambda credentials: {"email": "user@gmail.com"},  # noqa: ARG005
+    )
+    monkeypatch.setattr(
+        "auth.google_auth.save_credentials_to_session",
+        lambda *args: session_cache_writes.append(args),
+    )
+    monkeypatch.setattr("auth.google_auth.is_stateless_mode", lambda: False)
+
+    with pytest.raises(RuntimeError, match="Failed to persist credentials"):
+        await handle_auth_callback(
+            scopes=["scope.a"],
+            authorization_response="http://localhost/callback?state=abc123&code=code123",
+            redirect_uri="http://localhost/callback",
+            session_id="session-1",
+        )
+
+    assert credential_store.saved_credentials.refresh_token == "callback-refresh-token"
+    assert oauth_store.store_calls == 0
+    assert session_cache_writes == []

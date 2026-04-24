@@ -158,3 +158,38 @@ class TestPathTraversal:
         cred_store.store_credential("user+admin@example.com", mock_creds)
 
         assert cred_store.list_users() == ["user+admin@example.com"]
+
+    def test_get_credential_path_falls_back_to_legacy_filename(self, cred_store):
+        """Existing legacy filenames remain readable after URL-encoding rollout."""
+        legacy_path = os.path.join(
+            cred_store.base_dir,
+            f"user_admin@example.com{CredentialStore.FILE_EXTENSION}",
+        )
+        os.makedirs(cred_store.base_dir, exist_ok=True)
+        with open(legacy_path, "w") as f:
+            json.dump({}, f)
+
+        resolved = cred_store._get_credential_path("user+admin@example.com")
+
+        assert resolved == legacy_path
+
+    def test_list_users_includes_legacy_filename_variants(self, cred_store):
+        """Legacy sanitized filenames remain discoverable during migration."""
+        os.makedirs(cred_store.base_dir, exist_ok=True)
+
+        encoded_path = os.path.join(
+            cred_store.base_dir,
+            f"user%2Badmin@example.com{CredentialStore.FILE_EXTENSION}",
+        )
+        legacy_path = os.path.join(
+            cred_store.base_dir,
+            f"user_admin@example.com{CredentialStore.FILE_EXTENSION}",
+        )
+        for path in (encoded_path, legacy_path):
+            with open(path, "w") as f:
+                json.dump({}, f)
+
+        assert cred_store.list_users() == [
+            "user+admin@example.com",
+            "user_admin@example.com",
+        ]

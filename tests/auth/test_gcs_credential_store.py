@@ -88,6 +88,16 @@ class TestRoundTrip:
         assert loaded.refresh_token == "refresh_token_value"
         assert loaded.scopes == ["openid", "email"]
 
+    def test_get_propagates_non_notfound_download_error(
+        self, cred_store, mock_storage_client
+    ):
+        blob = MagicMock()
+        blob.download_as_bytes.side_effect = RuntimeError("permission denied")
+        mock_storage_client.blob.return_value = blob
+
+        with pytest.raises(RuntimeError, match="permission denied"):
+            cred_store.get_credential("user@example.com")
+
     def test_store_uploads_serialized_payload(
         self, cred_store, mock_storage_client, mock_creds
     ):

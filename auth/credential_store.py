@@ -8,6 +8,7 @@ supporting multiple backends configurable via environment variables.
 import json
 import logging
 import os
+import re
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import List, Optional
@@ -119,12 +120,31 @@ class LocalDirectoryCredentialStore(CredentialStore):
             f"LocalDirectoryCredentialStore initialized with base_dir: {base_dir}"
         )
 
+    @staticmethod
+    def _legacy_safe_email(user_email: str) -> str:
+        """Return the pre-URL-encoding filename form for backward compatibility."""
+        return re.sub(r"[^a-zA-Z0-9@._-]", "_", user_email)
+
+    def _resolve_credential_path(self, filename: str) -> str:
+        """Resolve a credential filename under base_dir and enforce containment."""
+        creds_path = os.path.join(self.base_dir, filename)
+
+        # Verify resolved path is still under base_dir
+        base_resolved = os.path.realpath(str(self.base_dir))
+        resolved = os.path.realpath(creds_path)
+        if not resolved.startswith(base_resolved + os.sep):
+            raise ValueError(f"Invalid credential path: {creds_path}")
+
+        return creds_path
+
     def _get_credential_path(self, user_email: str) -> str:
         """Get the file path for a user's credentials.
 
         URL-encodes user_email to prevent path traversal while preserving a
-        collision-free mapping from email address to filename. The resolved
-        path is validated to remain under base_dir.
+        collision-free mapping from email address to filename. For backward
+        compatibility, pre-existing legacy filenames from the older regex-based
+        sanitization scheme are still discovered if the URL-encoded file does
+        not exist yet. The resolved path is validated to remain under base_dir.
         """
         if not user_email or not user_email.strip():
             raise ValueError("user_email must be a non-empty string")
@@ -134,13 +154,23 @@ class LocalDirectoryCredentialStore(CredentialStore):
             logger.info(f"Created credentials directory: {self.base_dir}")
 
         safe_email = quote(user_email, safe="@._-")
-        creds_path = os.path.join(self.base_dir, f"{safe_email}{self.FILE_EXTENSION}")
+        creds_path = self._resolve_credential_path(f"{safe_email}{self.FILE_EXTENSION}")
 
-        # Verify resolved path is still under base_dir
-        base_resolved = os.path.realpath(str(self.base_dir))
-        resolved = os.path.realpath(creds_path)
-        if not resolved.startswith(base_resolved + os.sep):
-            raise ValueError(f"Invalid credential path: {creds_path}")
+        if os.path.exists(creds_path):
+            return creds_path
+
+        legacy_safe_email = self._legacy_safe_email(user_email)
+        if legacy_safe_email != safe_email:
+            legacy_path = self._resolve_credential_path(
+                f"{legacy_safe_email}{self.FILE_EXTENSION}"
+            )
+            if os.path.exists(legacy_path):
+                logger.info(
+                    "Using legacy credential filename for %s at %s",
+                    user_email,
+                    legacy_path,
+                )
+                return legacy_path
 
         return creds_path
 
@@ -237,22 +267,22 @@ class LocalDirectoryCredentialStore(CredentialStore):
         if not os.path.exists(self.base_dir):
             return []
 
-        users = []
+        users = set()
         non_credential_files = {"oauth_states"}
         try:
             for filename in os.listdir(self.base_dir):
                 if filename.endswith(self.FILE_EXTENSION):
-                    encoded_user_email = filename[
-                        : -len(self.FILE_EXTENSION)
-                    ]  # Remove extension
-                    user_email = unquote(encoded_user_email)
+                    stored_name = filename[: -len(self.FILE_EXTENSION)]
+                    user_email = (
+                        unquote(stored_name) if "%" in stored_name else stored_name
+                    )
                     if (
-                        encoded_user_email in non_credential_files
+                        stored_name in non_credential_files
                         or user_email in non_credential_files
                         or "@" not in user_email
                     ):
                         continue
-                    users.append(user_email)
+                    users.add(user_email)
             logger.debug(
                 f"Found {len(users)} users with credentials in {self.base_dir}"
             )
@@ -374,7 +404,7 @@ class GCSCredentialStore(CredentialStore):
             return None
         except Exception as e:
             logger.error(f"Error downloading credentials for {user_email}: {e}")
-            return None
+            raise
 
         try:
             creds_data = json.loads(raw)
@@ -504,12 +534,17 @@ def _parse_bool_env(value: Optional[str]) -> bool:
     )
 
 
-def _selected_backend() -> str:
+def get_selected_backend() -> str:
     """Return the configured credential store backend."""
     return (
         os.getenv("WORKSPACE_MCP_CREDENTIAL_STORE_BACKEND", "").strip().lower()
         or "local_directory"
     )
+
+
+def _selected_backend() -> str:
+    """Backward-compatible alias for callers not yet using the public helper."""
+    return get_selected_backend()
 
 
 # Global credential store instance
@@ -526,7 +561,7 @@ def get_credential_store() -> CredentialStore:
     global _credential_store
 
     if _credential_store is None:
-        backend = _selected_backend()
+        backend = get_selected_backend()
         if backend == "gcs":
             # GCS backend does not support list_users(), which is required for
             # single-user mode. Reject unless OAuth 2.1 is enabled.
