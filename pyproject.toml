@@ -122,6 +122,9 @@ exclude = ["tests*", "docs*", "build", "dist"]
 [tool.pytest.ini_options]
 addopts = "--ignore=tests/gappsscript/manual_test.py"
 pythonpath = ["."]
+markers = [
+    "integration: marks tests as requiring real external services (deselect with '-m \"not integration\"')",
+]
 
 [tool.setuptools.package-data]
 core = ["tool_tiers.yaml"]
