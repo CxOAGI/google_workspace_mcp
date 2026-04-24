@@ -41,5 +41,47 @@ def markdown_to_docs_requests(
 
 
 def _emit_requests(tokens, requests, tab_id, start_index):
-    """Walk markdown-it tokens and append Docs API requests. Stub - to be filled in Task 5."""
-    pass
+    """Walk markdown-it tokens and append Docs API requests.
+
+    Maintains a running `cursor` that represents the current insertion point
+    in the document. Each insertText advances cursor by len(text).
+    """
+    cursor = [start_index]  # mutable via list so helpers can advance it
+
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok.type == "paragraph_open":
+            # paragraph_open is followed by inline (children), then paragraph_close
+            inline_tok = tokens[i + 1]
+            text = _render_inline_plain(inline_tok.children or [])
+            text += "\n"
+            requests.append(_build_insert_text(cursor[0], text, tab_id))
+            cursor[0] += len(text)
+            i += 3  # skip paragraph_open, inline, paragraph_close
+            continue
+        i += 1
+
+
+def _render_inline_plain(children) -> str:
+    """Render inline tokens as plain text, ignoring styling for now.
+
+    Tasks 7+ expand this to handle bold, italic, code, links.
+    """
+    out = []
+    for child in children:
+        if child.type == "text":
+            out.append(child.content)
+        elif child.type == "softbreak":
+            out.append(" ")
+        elif child.type == "hardbreak":
+            out.append("\n")
+    return "".join(out)
+
+
+def _build_insert_text(index: int, text: str, tab_id: Optional[str]) -> dict:
+    """Build an insertText request dict, threading tab_id if provided."""
+    location = {"index": index}
+    if tab_id:
+        location["tabId"] = tab_id
+    return {"insertText": {"location": location, "text": text}}
