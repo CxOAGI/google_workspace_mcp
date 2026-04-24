@@ -148,3 +148,22 @@ def test_fenced_code_block_emits_monospace_style():
         "Roboto Mono",
         "Consolas",
     )
+
+
+def test_blockquote_emits_indent():
+    requests = markdown_to_docs_requests("> This is quoted.\n> Continued.")
+    styles = [r for r in requests if "updateParagraphStyle" in r]
+    # At least one paragraph style with a positive left indent
+    indented = [
+        s for s in styles
+        if s["updateParagraphStyle"]["paragraphStyle"].get("indentStart", {}).get("magnitude", 0) > 0
+    ]
+    assert len(indented) >= 1
+
+
+def test_horizontal_rule_produces_separator_insert():
+    # HR should emit some form of insertText separator between the surrounding paragraphs.
+    requests = markdown_to_docs_requests("Before\n\n---\n\nAfter")
+    inserts = [r for r in requests if "insertText" in r]
+    # Expect at least 3 inserts: "Before\n", HR's separator, "After\n"
+    assert len(inserts) >= 3

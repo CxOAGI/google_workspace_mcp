@@ -137,6 +137,58 @@ def _emit_requests(tokens, requests, tab_id, start_index):
             i += 1
             continue
 
+        if tok.type == "blockquote_open":
+            close_type = "blockquote_close"
+            depth = 1
+            j = i + 1
+            while j < len(tokens) and depth > 0:
+                if tokens[j].type == tok.type:
+                    depth += 1
+                elif tokens[j].type == close_type:
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            quote_start = cursor[0]
+            # Process paragraphs inside the blockquote
+            k = i + 1
+            while k < j:
+                if tokens[k].type == "paragraph_open" and k + 1 < j and tokens[k + 1].type == "inline":
+                    inline_tok = tokens[k + 1]
+                    text, inline_styles = _render_inline_with_styles(
+                        inline_tok.children or [], cursor[0], tab_id
+                    )
+                    text += "\n"
+                    requests.append(_build_insert_text(cursor[0], text, tab_id))
+                    cursor[0] += len(text)
+                    requests.extend(inline_styles)
+                    k += 3
+                    continue
+                k += 1
+            quote_end = cursor[0]
+            # Apply indent across the whole blockquote range
+            rng = {"startIndex": quote_start, "endIndex": quote_end}
+            if tab_id:
+                rng["tabId"] = tab_id
+            requests.append({
+                "updateParagraphStyle": {
+                    "range": rng,
+                    "paragraphStyle": {
+                        "indentStart": {"magnitude": 36, "unit": "PT"},
+                    },
+                    "fields": "indentStart",
+                }
+            })
+            i = j + 1
+            continue
+
+        if tok.type == "hr":
+            # Emit a blank paragraph as a visual separator
+            requests.append(_build_insert_text(cursor[0], "\n", tab_id))
+            cursor[0] += 1
+            i += 1
+            continue
+
         if tok.type == "paragraph_open":
             # paragraph_open is followed by inline (children), then paragraph_close
             inline_tok = tokens[i + 1]
