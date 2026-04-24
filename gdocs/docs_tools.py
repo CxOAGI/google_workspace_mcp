@@ -2524,13 +2524,18 @@ async def update_tab_from_markdown(
             .execute
         )
         tab_end = _find_tab_end_index(doc, tab_id)
-        if tab_end and tab_end > 1:
+        # tab_end is the endIndex of the last structural element, which includes
+        # the trailing newline that terminates the tab's body segment. Google Docs
+        # rejects deleteContentRange requests that include that final newline, so
+        # we delete up to tab_end - 1. If the tab is empty (tab_end <= 2 means
+        # just the terminating newline exists), there's nothing to delete.
+        if tab_end and tab_end > 2:
             all_requests.append(
                 {
                     "deleteContentRange": {
                         "range": {
                             "startIndex": 1,
-                            "endIndex": tab_end,
+                            "endIndex": tab_end - 1,
                             "tabId": tab_id,
                         }
                     }
