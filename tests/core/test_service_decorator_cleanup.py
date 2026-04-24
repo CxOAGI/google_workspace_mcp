@@ -17,9 +17,7 @@ def _patch_common_decorator_state(monkeypatch):
         return (None, None, None)
 
     monkeypatch.setattr(service_decorator, "is_oauth21_enabled", lambda: False)
-    monkeypatch.setattr(
-        service_decorator, "_get_auth_context", fake_get_auth_context
-    )
+    monkeypatch.setattr(service_decorator, "_get_auth_context", fake_get_auth_context)
     monkeypatch.setattr(
         service_decorator,
         "_extract_oauth20_user_email",
@@ -28,14 +26,10 @@ def _patch_common_decorator_state(monkeypatch):
     monkeypatch.setattr(
         service_decorator,
         "_override_oauth21_user_email",
-        lambda use_oauth21,
-        authenticated_user,
-        user_google_email,
-        args,
-        kwargs,
-        wrapper_params,
-        tool_name,
-        service_type=None: (user_google_email, args),
+        lambda use_oauth21, authenticated_user, user_google_email, args, kwargs, wrapper_params, tool_name, service_type=None: (
+            user_google_email,
+            args,
+        ),
     )
     monkeypatch.setattr(
         service_decorator, "_detect_oauth_version", lambda *args, **kwargs: False
