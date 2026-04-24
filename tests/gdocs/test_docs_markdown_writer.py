@@ -132,3 +132,19 @@ def test_ordered_list_emits_numbered_preset():
     assert len(bullets) == 1
     preset = bullets[0]["createParagraphBullets"]["bulletPreset"]
     assert preset == "NUMBERED_DECIMAL_ALPHA_ROMAN"
+
+
+def test_fenced_code_block_emits_monospace_style():
+    md = "```python\ndef foo():\n    return 42\n```"
+    requests = markdown_to_docs_requests(md)
+    inserts = [r for r in requests if "insertText" in r]
+    styles = [r for r in requests if "updateTextStyle" in r]
+    assert len(inserts) == 1
+    assert inserts[0]["insertText"]["text"] == "def foo():\n    return 42\n\n"
+    assert len(styles) >= 1
+    ts = styles[0]["updateTextStyle"]["textStyle"]
+    assert ts.get("weightedFontFamily", {}).get("fontFamily") in (
+        "Courier New",
+        "Roboto Mono",
+        "Consolas",
+    )

@@ -117,6 +117,26 @@ def _emit_requests(tokens, requests, tab_id, start_index):
             i = j + 1
             continue
 
+        if tok.type == "fence":
+            content = tok.content
+            start_idx = cursor[0]
+            text = content if content.endswith("\n") else content + "\n"
+            text += "\n"  # trailing blank line to separate from next block
+            requests.append(_build_insert_text(cursor[0], text, tab_id))
+            cursor[0] += len(text)
+            code_end = cursor[0] - 1  # exclude the trailing blank newline
+            requests.append(
+                _build_text_style(
+                    start_idx,
+                    code_end,
+                    {"weightedFontFamily": {"fontFamily": "Courier New", "weight": 400}},
+                    "weightedFontFamily",
+                    tab_id,
+                )
+            )
+            i += 1
+            continue
+
         if tok.type == "paragraph_open":
             # paragraph_open is followed by inline (children), then paragraph_close
             inline_tok = tokens[i + 1]
