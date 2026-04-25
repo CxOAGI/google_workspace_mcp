@@ -1,13 +1,10 @@
-"""Regression tests for insert_doc_tab response key handling.
+"""Regression tests for addDocumentTab response key handling.
 
 The Google Docs batchUpdate response for an addDocumentTab request comes back
 under the key ``addDocumentTab`` (matching the request field name), not
-``createDocumentTab``. The original fork code looked for ``createDocumentTab``,
+``createDocumentTab``. The original code looked for ``createDocumentTab``,
 so tab_id extraction silently failed. These tests lock in the fix and its
 backwards-compat fallback.
-
-Verified against a real Google Doc via ``scripts/spike/spike_tab_operations.py``
-in commit b374139.
 """
 
 from unittest.mock import Mock
@@ -41,7 +38,7 @@ def _mock_service_with_reply(reply: dict) -> Mock:
 
 
 @pytest.mark.asyncio
-async def test_insert_doc_tab_extracts_tab_id_from_add_document_tab_reply():
+async def test_create_tab_extracts_tab_id_from_add_document_tab_reply():
     """The fix - reply["addDocumentTab"] is where Google puts the new tab's properties."""
     service = _mock_service_with_reply(
         {
@@ -55,20 +52,21 @@ async def test_insert_doc_tab_extracts_tab_id_from_add_document_tab_reply():
         }
     )
 
-    result = await _unwrap(docs_tools.insert_doc_tab)(
+    result = await _unwrap(docs_tools.manage_doc_tab)(
         service=service,
         user_google_email="test@example.com",
         document_id="doc-abc",
+        action="create",
         title="My Tab",
         index=0,
     )
 
-    assert "t.xyz123" in result, f"Expected tab_id in result, got: {result}"
-    assert "Tab ID: t.xyz123" in result
+    assert result["tab_id"] == "t.xyz123"
+    assert "Tab ID: t.xyz123" in result["message"]
 
 
 @pytest.mark.asyncio
-async def test_insert_doc_tab_falls_back_to_create_document_tab_for_compat():
+async def test_create_tab_falls_back_to_create_document_tab_for_compat():
     """Backwards compat - if Google ever returns under createDocumentTab, still work."""
     service = _mock_service_with_reply(
         {
@@ -81,32 +79,34 @@ async def test_insert_doc_tab_falls_back_to_create_document_tab_for_compat():
         }
     )
 
-    result = await _unwrap(docs_tools.insert_doc_tab)(
+    result = await _unwrap(docs_tools.manage_doc_tab)(
         service=service,
         user_google_email="test@example.com",
         document_id="doc-abc",
+        action="create",
         title="Legacy Tab",
         index=0,
     )
 
-    assert "t.legacy" in result
+    assert result["tab_id"] == "t.legacy"
 
 
 @pytest.mark.asyncio
-async def test_insert_doc_tab_omits_tab_id_when_reply_is_empty():
+async def test_create_tab_omits_tab_id_when_reply_is_empty():
     """Guard - if the reply has neither key, the tool must not crash."""
     service = _mock_service_with_reply({})
 
-    result = await _unwrap(docs_tools.insert_doc_tab)(
+    result = await _unwrap(docs_tools.manage_doc_tab)(
         service=service,
         user_google_email="test@example.com",
         document_id="doc-abc",
+        action="create",
         title="Orphan Tab",
         index=0,
     )
 
-    assert "Tab ID" not in result
-    assert "doc-abc" in result
+    assert result["tab_id"] is None
+    assert "doc-abc" in result["message"]
 
 
 class TestBatchOperationManagerExtractCreatedTabs:
@@ -154,17 +154,9 @@ class TestBatchOperationManagerExtractCreatedTabs:
         result = {
             "replies": [
                 {"insertText": {}},
-                {
-                    "addDocumentTab": {
-                        "tabProperties": {"tabId": "t.a", "title": "A"}
-                    }
-                },
+                {"addDocumentTab": {"tabProperties": {"tabId": "t.a", "title": "A"}}},
                 {},
-                {
-                    "addDocumentTab": {
-                        "tabProperties": {"tabId": "t.b", "title": "B"}
-                    }
-                },
+                {"addDocumentTab": {"tabProperties": {"tabId": "t.b", "title": "B"}}},
             ]
         }
 

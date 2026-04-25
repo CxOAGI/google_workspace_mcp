@@ -9,7 +9,7 @@ MCP tools for reading, creating, editing, and managing Google Docs. All tools re
 - Paragraph & List Styling: update_paragraph_style
 - Structural Elements: insert_doc_elements, create_table_with_data, insert_doc_image
 - Headers, Footers & Export: update_doc_headers_footers, export_doc_to_pdf
-- Tabs: insert_doc_tab, update_doc_tab, delete_doc_tab, update_tab_from_markdown
+- Tabs: manage_doc_tab
 - Comments: list_document_comments, manage_document_comment
 - Inspection & Debugging: inspect_doc_structure, debug_table_structure
 - Batch Operations: batch_update_doc
@@ -201,76 +201,38 @@ Export a Google Doc to PDF and save it to Drive.
 
 ## Tabs
 
-### insert_doc_tab
-Add a new tab to a document.
+### manage_doc_tab
+Create, rename, delete, or populate tabs from markdown. Uses `action` to select the operation.
 
 | Parameter | Type | Required | Default | Notes |
 |-----------|------|----------|---------|-------|
 | user_google_email | string | yes | | |
 | document_id | string | yes | | |
-| title | string | yes | | Tab title |
-| index | integer | yes | | 0-based position among sibling tabs |
-| parent_tab_id | string | no | | Nest under this parent tab |
+| action | string | yes | | `"create"`, `"rename"`, `"delete"`, or `"populate_from_markdown"` |
+| tab_id | string | rename/delete/populate | | Get from `inspect_doc_structure` |
+| title | string | create/rename | | Tab title |
+| index | integer | create | | 0-based position among sibling tabs |
+| parent_tab_id | string | no | | Nest under a parent tab (create only) |
+| markdown_text | string | populate | | Markdown source to render |
+| replace_existing | bool | no | `True` | Clear tab body before inserting markdown |
 
-### update_doc_tab
-Rename an existing tab.
-
-| Parameter | Type | Required | Default | Notes |
-|-----------|------|----------|---------|-------|
-| user_google_email | string | yes | | |
-| document_id | string | yes | | |
-| tab_id | string | yes | | Get from `inspect_doc_structure` |
-| title | string | yes | | New tab title |
-
-### delete_doc_tab
-Delete a tab by ID.
-
-| Parameter | Type | Required | Default | Notes |
-|-----------|------|----------|---------|-------|
-| user_google_email | string | yes | | |
-| document_id | string | yes | | |
-| tab_id | string | yes | | Get from `inspect_doc_structure` |
-
-### update_tab_from_markdown
-
-Replace or append markdown content into a specific document tab. Parses
-CommonMark+GFM markdown and emits Docs API batchUpdate requests targeting
-the tab via `tab_id`.
-
-**Arguments**
-
-- `user_google_email` (str) - account to act as
-
-- `document_id` (str) - target Google Doc ID
-
-- `tab_id` (str) - target tab ID (from `insert_doc_tab` or `inspect_doc_structure`)
-
-- `markdown_text` (str) - markdown source to render
-
-- `replace_existing` (bool, default `True`) - clear tab body before insertion
-
-**Returns** - dict with `success`, `requests_applied` count, `tab_id`.
-
-**Supported markdown**
+**Supported markdown** (populate_from_markdown action)
 
 Headings (H1-H6), paragraphs, bold/italic/code inline, links, ordered
 and unordered lists, fenced code blocks, blockquotes, horizontal rules.
 
-**Not yet supported**
+Not yet supported: images, tables (plain-text fallback), footnotes, smart chips, equations.
 
-Images, tables (plain-text fallback), footnotes, smart chips, equations.
-
-**Example use**
+**Example**
 
 ~~~python
-# First create the tab
-insert_doc_tab(document_id="...", title="Blog Article", index=0)
-# Then populate it from a markdown file
-update_tab_from_markdown(
+# Create a tab, then populate it from markdown
+manage_doc_tab(document_id="...", action="create", title="Blog Article", index=0)
+manage_doc_tab(
     document_id="...",
+    action="populate_from_markdown",
     tab_id="t.0.5",
     markdown_text=open("blog.md").read(),
-    replace_existing=True,
 )
 ~~~
 

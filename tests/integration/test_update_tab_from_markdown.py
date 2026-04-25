@@ -1,4 +1,4 @@
-"""Integration test - update_tab_from_markdown against a real Google Doc.
+"""Integration test - manage_doc_tab populate_from_markdown against a real Google Doc.
 
 Requires environment:
   - GOOGLE_CLIENT_SECRET_PATH pointing to OAuth credentials JSON
@@ -14,17 +14,12 @@ Run - uv run pytest tests/integration/ -v -m integration
 
 import os
 import pathlib
-import sys
 import time
 
 import pytest
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-
-# Allow importing the fork's modules
-FORK_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
-sys.path.insert(0, str(FORK_ROOT))
 
 pytestmark = pytest.mark.integration
 
@@ -71,8 +66,6 @@ def docs_service():
     if not doc_id:
         pytest.skip("INTEGRATION_TEST_DOC_ID not set")
 
-    # The tool calls below resolve os.environ["USER_GOOGLE_EMAIL"] - skip
-    # here rather than KeyError deep inside the async function.
     if not os.environ.get("USER_GOOGLE_EMAIL"):
         pytest.skip(
             "USER_GOOGLE_EMAIL not set. Export the Google account email the "
@@ -91,21 +84,25 @@ def docs_service():
 
 def _create_scratch_tab(service, doc_id, title):
     """Create a fresh tab at index 0 and return its tab_id."""
-    response = service.documents().batchUpdate(
-        documentId=doc_id,
-        body={
-            "requests": [
-                {
-                    "addDocumentTab": {
-                        "tabProperties": {
-                            "title": title,
-                            "index": 0,
+    response = (
+        service.documents()
+        .batchUpdate(
+            documentId=doc_id,
+            body={
+                "requests": [
+                    {
+                        "addDocumentTab": {
+                            "tabProperties": {
+                                "title": title,
+                                "index": 0,
+                            }
                         }
                     }
-                }
-            ]
-        },
-    ).execute()
+                ]
+            },
+        )
+        .execute()
+    )
     reply = response["replies"][0]
     return reply["addDocumentTab"]["tabProperties"]["tabId"]
 
@@ -120,10 +117,14 @@ def _delete_tab(service, doc_id, tab_id):
 
 def _count_tab_content(service, doc_id, tab_id):
     """Fetch the doc and return (n_structural_elements, char_count) for the tab."""
-    doc = service.documents().get(
-        documentId=doc_id,
-        includeTabsContent=True,
-    ).execute()
+    doc = (
+        service.documents()
+        .get(
+            documentId=doc_id,
+            includeTabsContent=True,
+        )
+        .execute()
+    )
     for t in doc.get("tabs", []):
         if t.get("tabProperties", {}).get("tabId") == tab_id:
             body = t.get("documentTab", {}).get("body", {})
@@ -158,20 +159,21 @@ Replacement content. If this renders cleanly, replace_existing works.
 
 
 @pytest.mark.asyncio
-async def test_update_tab_from_markdown_populates_empty_tab(docs_service):
+async def test_populate_from_markdown_fills_empty_tab(docs_service):
     """Populating a fresh tab writes all the markdown requests and produces real content."""
-    from gdocs.docs_tools import update_tab_from_markdown
+    from gdocs.docs_tools import manage_doc_tab
 
     service, doc_id = docs_service
     tab_id = _create_scratch_tab(service, doc_id, f"Integration {int(time.time())}-A")
 
     try:
-        fn = _unwrap(update_tab_from_markdown)
+        fn = _unwrap(manage_doc_tab)
 
         result = await fn(
             service=service,
             user_google_email=os.environ["USER_GOOGLE_EMAIL"],
             document_id=doc_id,
+            action="populate_from_markdown",
             tab_id=tab_id,
             markdown_text=SAMPLE_MARKDOWN_FIRST,
             replace_existing=True,
@@ -189,21 +191,22 @@ async def test_update_tab_from_markdown_populates_empty_tab(docs_service):
 
 
 @pytest.mark.asyncio
-async def test_update_tab_from_markdown_replaces_existing_content(docs_service):
+async def test_populate_from_markdown_replaces_existing_content(docs_service):
     """Calling with replace_existing=True on a populated tab swaps old for new cleanly."""
-    from gdocs.docs_tools import update_tab_from_markdown
+    from gdocs.docs_tools import manage_doc_tab
 
     service, doc_id = docs_service
     tab_id = _create_scratch_tab(service, doc_id, f"Integration {int(time.time())}-B")
 
     try:
-        fn = _unwrap(update_tab_from_markdown)
+        fn = _unwrap(manage_doc_tab)
 
         # First pass
         await fn(
             service=service,
             user_google_email=os.environ["USER_GOOGLE_EMAIL"],
             document_id=doc_id,
+            action="populate_from_markdown",
             tab_id=tab_id,
             markdown_text=SAMPLE_MARKDOWN_FIRST,
             replace_existing=True,
@@ -215,6 +218,7 @@ async def test_update_tab_from_markdown_replaces_existing_content(docs_service):
             service=service,
             user_google_email=os.environ["USER_GOOGLE_EMAIL"],
             document_id=doc_id,
+            action="populate_from_markdown",
             tab_id=tab_id,
             markdown_text=SAMPLE_MARKDOWN_SECOND,
             replace_existing=True,
@@ -222,11 +226,8 @@ async def test_update_tab_from_markdown_replaces_existing_content(docs_service):
 
         assert result["success"] is True
         _, second_chars = _count_tab_content(service, doc_id, tab_id)
-        # Second content is different length from first
-        assert second_chars != first_chars, \
+        assert second_chars != first_chars, (
             "Content char count should change after replacement"
-        # The word "Round 2" should be in there somewhere
-        # (we can't easily verify specific substrings without fetching text,
-        # but the char count change + success result is a strong signal)
+        )
     finally:
         _delete_tab(service, doc_id, tab_id)
