@@ -583,7 +583,11 @@ def main():
         safe_print(f"🔍 Skipping credentials directory check ({skip_reason})")
         safe_print("")
 
-    if backend == "gcs":
+    if (
+        backend == "gcs"
+        and not is_stateless_mode()
+        and not is_service_account_enabled()
+    ):
         try:
             from auth.credential_store import GCSCredentialStore
 

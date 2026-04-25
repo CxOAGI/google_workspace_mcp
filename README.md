@@ -293,6 +293,14 @@ uv run main.py --transport streamable-http --tools gmail drive calendar
 
 **Python 3.10+** · **[uv/uvx](https://github.com/astral-sh/uv)** · **Google Cloud Project** with OAuth 2.0 credentials
 
+If you want the GCS credential store backend, install the optional dependency first:
+
+```bash
+uv sync --extra gcs
+# or
+pip install "workspace-mcp[gcs]"
+```
+
 ### Configuration
 
 <details open>
@@ -1452,6 +1460,10 @@ The server includes an abstract credential store API with pluggable backends for
 
 **Configuration:**
 ```bash
+# Install the optional dependency if you plan to use the GCS backend:
+# uv sync --extra gcs
+# or: pip install "workspace-mcp[gcs]"
+#
 # Select backend (default: local_directory). Supported: local_directory, gcs
 export WORKSPACE_MCP_CREDENTIAL_STORE_BACKEND="gcs"
 

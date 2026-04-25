@@ -888,6 +888,13 @@ def get_credentials(
                                             f"[get_credentials] Failed to persist refreshed OAuth 2.1 credentials for user {user_email}: {persist_error}"
                                         )
 
+                                if not persist_succeeded and not is_stateless_mode():
+                                    logger.warning(
+                                        "[get_credentials] Refreshed OAuth 2.1 credentials for user %s were not persisted; discarding in-memory refresh result.",
+                                        user_email,
+                                    )
+                                    return None
+
                                 if persist_succeeded or is_stateless_mode():
                                     store.store_session(
                                         user_email=user_email,
@@ -1056,6 +1063,13 @@ def get_credentials(
                     logger.info(
                         f"Skipping credential file save in stateless mode for {user_google_email}"
                     )
+
+                if not persist_succeeded and not is_stateless_mode():
+                    logger.warning(
+                        "[get_credentials] Refreshed credentials for user %s were not persisted; discarding in-memory refresh result.",
+                        user_google_email,
+                    )
+                    return None
 
                 if persist_succeeded or is_stateless_mode():
                     # Also update OAuth21SessionStore
