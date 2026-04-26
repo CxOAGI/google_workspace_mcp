@@ -5,13 +5,9 @@ localhost download URLs or local file paths.
 """
 
 import base64
-import os
-import sys
 from unittest.mock import Mock
 
 import pytest
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from gmail.gmail_tools import (
     _format_base64_content_block,

@@ -1807,6 +1807,8 @@ async def get_gmail_attachment_content(
             f"\nError: {str(e)}",
             "\nNote: Attachment IDs are ephemeral. Always use IDs from the most recent message fetch.",
         ]
+        if return_base64 and base64_data:
+            result_lines.extend(_format_base64_content_block(base64_data))
         return "\n".join(result_lines)
 
 
