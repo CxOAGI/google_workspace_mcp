@@ -9,8 +9,6 @@ from auth.credential_store import (
     DEFAULT_SCOPES,
     bootstrap_credentials_from_env,
     get_credential_store,
-    _credential_store,
-    set_credential_store,
 )
 
 

@@ -44,7 +44,11 @@ class MCPSessionMiddleware:
             await self.app(scope, receive, send)
             return
 
-        logger.debug("MCPSessionMiddleware processing request: %s %s", scope.get("method", ""), path)
+        logger.debug(
+            "MCPSessionMiddleware processing request: %s %s",
+            scope.get("method", ""),
+            path,
+        )
 
         session_context = None
 
