@@ -139,8 +139,18 @@ BASE_SCOPES = [USERINFO_EMAIL_SCOPE, USERINFO_PROFILE_SCOPE, OPENID_SCOPE]
 PROTOCOL_AUTH_SCOPES = [USERINFO_EMAIL_SCOPE, OPENID_SCOPE]
 
 # Service-specific scope groups
+#
+# Each group lists only the scopes that must be explicitly granted at
+# OAuth time. Narrower scopes already implied by SCOPE_HIERARCHY (e.g.
+# documents.readonly under documents) are intentionally omitted — at
+# runtime has_required_scopes() expands the broad grant to satisfy the
+# narrow decorator requirements, so no tool code needs to change.
+
+# DOCS_WRITE_SCOPE implicitly covers documents.readonly via SCOPE_HIERARCHY.
+# DRIVE_READONLY_SCOPE and DRIVE_FILE_SCOPE are kept because they are
+# independent (drive.readonly and drive.file do not imply each other) and
+# the docs tools need both list/discover and create/update access.
 DOCS_SCOPES = [
-    DOCS_READONLY_SCOPE,
     DOCS_WRITE_SCOPE,
     DRIVE_READONLY_SCOPE,
     DRIVE_FILE_SCOPE,
@@ -163,34 +173,45 @@ GMAIL_SCOPES = [
     GMAIL_SETTINGS_BASIC_SCOPE,
 ]
 
+# CHAT_WRITE_SCOPE implicitly covers chat.messages.readonly; CHAT_SPACES_SCOPE
+# implicitly covers chat.spaces.readonly. The two broad scopes are
+# independent so both are listed.
 CHAT_SCOPES = [
-    CHAT_READONLY_SCOPE,
     CHAT_WRITE_SCOPE,
     CHAT_SPACES_SCOPE,
-    CHAT_SPACES_READONLY_SCOPE,
 ]
 
-SHEETS_SCOPES = [SHEETS_READONLY_SCOPE, SHEETS_WRITE_SCOPE, DRIVE_READONLY_SCOPE]
+# SHEETS_WRITE_SCOPE implicitly covers spreadsheets.readonly via
+# SCOPE_HIERARCHY. drive.readonly is kept so the sheets tools can list
+# and discover spreadsheets the user owns (drive.file alone is not enough
+# for that). drive.file is reached via DRIVE_SCOPE when the drive tool
+# is co-enabled.
+SHEETS_SCOPES = [SHEETS_WRITE_SCOPE, DRIVE_READONLY_SCOPE]
 
+# FORMS_BODY_SCOPE implicitly covers forms.body.readonly via
+# SCOPE_HIERARCHY. forms.responses.readonly is independent.
 FORMS_SCOPES = [
     FORMS_BODY_SCOPE,
-    FORMS_BODY_READONLY_SCOPE,
     FORMS_RESPONSES_READONLY_SCOPE,
 ]
 
-SLIDES_SCOPES = [SLIDES_SCOPE, SLIDES_READONLY_SCOPE]
+# SLIDES_SCOPE implicitly covers presentations.readonly via SCOPE_HIERARCHY.
+SLIDES_SCOPES = [SLIDES_SCOPE]
 
-TASKS_SCOPES = [TASKS_SCOPE, TASKS_READONLY_SCOPE]
+# TASKS_SCOPE implicitly covers tasks.readonly via SCOPE_HIERARCHY.
+TASKS_SCOPES = [TASKS_SCOPE]
 
-CONTACTS_SCOPES = [CONTACTS_SCOPE, CONTACTS_READONLY_SCOPE]
+# CONTACTS_SCOPE implicitly covers contacts.readonly via SCOPE_HIERARCHY.
+CONTACTS_SCOPES = [CONTACTS_SCOPE]
 
 CUSTOM_SEARCH_SCOPES = [CUSTOM_SEARCH_SCOPE]
 
+# SCRIPT_PROJECTS_SCOPE covers script.projects.readonly and
+# SCRIPT_DEPLOYMENTS_SCOPE covers script.deployments.readonly via
+# SCOPE_HIERARCHY. The remaining scopes are independent.
 SCRIPT_SCOPES = [
     SCRIPT_PROJECTS_SCOPE,
-    SCRIPT_PROJECTS_READONLY_SCOPE,
     SCRIPT_DEPLOYMENTS_SCOPE,
-    SCRIPT_DEPLOYMENTS_READONLY_SCOPE,
     SCRIPT_PROCESSES_READONLY_SCOPE,  # Required for list_script_processes
     SCRIPT_METRICS_SCOPE,  # Required for get_script_metrics
     SCRIPT_EXTERNAL_REQUEST_SCOPE,  # Required for scripts.run (execution API)
