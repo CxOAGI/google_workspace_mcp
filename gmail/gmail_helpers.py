@@ -8,7 +8,35 @@ from datetime import datetime, timezone
 from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 from typing import Any, Optional
 
+from fastmcp.exceptions import ToolError as ToolExecutionError
+from googleapiclient.errors import HttpError
+
 logger = logging.getLogger(__name__)
+
+RAW_BODY_TRUNCATE_LIMIT = 20000
+GMAIL_QUOTA_ERROR_MARKERS = (
+    "dailyLimitExceeded",
+    "quotaExceeded",
+    "rateLimitExceeded",
+    "userRateLimitExceeded",
+    "usageLimits",
+    "quota",
+    "rate limit",
+)
+
+GMAIL_METADATA_HEADERS = [
+    "Subject",
+    "From",
+    "To",
+    "Cc",
+    "Message-ID",
+    "In-Reply-To",
+    "References",
+    "Date",
+    "List-Unsubscribe",
+    "Precedence",
+    "List-Id",
+]
 
 
 def _normalize_email(address: str) -> str:
@@ -25,6 +53,33 @@ def _normalize_email(address: str) -> str:
     local, _, domain = addr.partition("@")
     local = local.split("+", 1)[0]
     return f"{local}@{domain}"
+
+
+def _http_error_status(error: HttpError) -> Optional[int]:
+    status = getattr(getattr(error, "resp", None), "status", None)
+    try:
+        return int(status)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_quota_or_rate_limit_error(error: HttpError) -> bool:
+    details = str(error).lower()
+    content = getattr(error, "content", None)
+    if isinstance(content, bytes):
+        details = f"{details} {content.decode('utf-8', errors='ignore').lower()}"
+    elif content:
+        details = f"{details} {str(content).lower()}"
+    return any(marker.lower() in details for marker in GMAIL_QUOTA_ERROR_MARKERS)
+
+
+def _is_benign_signature_http_error(error: HttpError) -> bool:
+    status = _http_error_status(error)
+    return status == 401 or (status == 403 and not _is_quota_or_rate_limit_error(error))
+
+
+def _signature_fetch_tool_error(error: Exception) -> ToolExecutionError:
+    return ToolExecutionError(f"Failed to fetch Gmail send-as signatures: {error}")
 
 
 def _parse_date_header(
@@ -100,8 +155,7 @@ def _analyze_thread_ownership_impl(
 
     # Thread subject: first message's Subject header
     first_headers = {
-        h["name"]: h["value"]
-        for h in messages[0].get("payload", {}).get("headers", [])
+        h["name"]: h["value"] for h in messages[0].get("payload", {}).get("headers", [])
     }
     thread_subject = first_headers.get("Subject") or None
 
@@ -117,8 +171,7 @@ def _analyze_thread_ownership_impl(
         is_draft = "DRAFT" in label_ids
 
         headers = {
-            h["name"]: h["value"]
-            for h in message.get("payload", {}).get("headers", [])
+            h["name"]: h["value"] for h in message.get("payload", {}).get("headers", [])
         }
 
         from_addr = headers.get("From", "")
@@ -127,9 +180,7 @@ def _analyze_thread_ownership_impl(
 
         # Collect participants from From/To/Cc using getaddresses (RFC-correct
         # parsing of quoted display names with embedded commas).
-        header_values = [
-            headers.get(hdr, "") for hdr in ("From", "To", "Cc")
-        ]
+        header_values = [headers.get(hdr, "") for hdr in ("From", "To", "Cc")]
         message_participants = set()
         for _n, addr in getaddresses([v for v in header_values if v]):
             norm = _normalize_email(addr) if addr else ""
@@ -170,9 +221,7 @@ def _analyze_thread_ownership_impl(
     last_dt, _last_message, last_headers = last_non_draft
     last_sender_raw = last_headers.get("From", "")
     _n, last_sender_email = parseaddr(last_sender_raw)
-    last_sender_norm = (
-        _normalize_email(last_sender_email) if last_sender_email else ""
-    )
+    last_sender_norm = _normalize_email(last_sender_email) if last_sender_email else ""
 
     # Ball-in-court: "user" = user owes reply, "them" = other party owes reply,
     # None = unresolvable. Use non-draft participants, so outbound-only threads
@@ -182,11 +231,7 @@ def _analyze_thread_ownership_impl(
         if normalized_user
         else non_draft_participants
     )
-    if (
-        not normalized_user
-        or "@" not in normalized_user
-        or "@" not in last_sender_norm
-    ):
+    if not normalized_user or "@" not in normalized_user or "@" not in last_sender_norm:
         ball_in_court_of = None
     elif not external_participants:
         ball_in_court_of = None
