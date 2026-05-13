@@ -139,16 +139,20 @@ DOCS_SCOPES = [
     DRIVE_FILE_SCOPE,
 ]
 
-CALENDAR_SCOPES = [CALENDAR_SCOPE, CALENDAR_READONLY_SCOPE, CALENDAR_EVENTS_SCOPE]
+# CALENDAR_SCOPE implicitly covers calendar.readonly and calendar.events
+# via SCOPE_HIERARCHY; narrower scopes are resolved at runtime by
+# has_required_scopes().
+CALENDAR_SCOPES = [CALENDAR_SCOPE]
 
-DRIVE_SCOPES = [DRIVE_SCOPE, DRIVE_READONLY_SCOPE, DRIVE_FILE_SCOPE]
+# DRIVE_SCOPE implicitly covers drive.readonly and drive.file via
+# SCOPE_HIERARCHY.
+DRIVE_SCOPES = [DRIVE_SCOPE]
 
+# GMAIL_MODIFY_SCOPE implicitly covers gmail.readonly, gmail.send,
+# gmail.compose, and gmail.labels via SCOPE_HIERARCHY. gmail.settings.basic
+# is independent and must be requested separately.
 GMAIL_SCOPES = [
-    GMAIL_READONLY_SCOPE,
-    GMAIL_SEND_SCOPE,
-    GMAIL_COMPOSE_SCOPE,
     GMAIL_MODIFY_SCOPE,
-    GMAIL_LABELS_SCOPE,
     GMAIL_SETTINGS_BASIC_SCOPE,
 ]
 
