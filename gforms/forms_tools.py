@@ -12,7 +12,11 @@ from typing import List, Optional, Dict, Any
 
 from mcp.types import ToolAnnotations
 
-from auth.service_decorator import require_google_service
+from auth.service_decorator import (
+    require_google_service,
+    secondary_google_service,
+)
+from gdrive.drive_helpers import move_file_to_folder
 from core.server import server
 from core.utils import handle_http_errors
 
@@ -135,6 +139,7 @@ async def create_form(
     title: str,
     description: Optional[str] = None,
     document_title: Optional[str] = None,
+    parent_folder_id: Optional[str] = None,
 ) -> str:
     """
     Create a new form using the title given in the provided form message in the request.
@@ -144,6 +149,10 @@ async def create_form(
         title (str): The title of the form.
         description (Optional[str]): The description of the form.
         document_title (Optional[str]): The document title (shown in browser tab).
+        parent_folder_id (Optional[str]): Optional Drive folder ID to create the
+            form in. When omitted, the form is created in My Drive root. When
+            provided, the new form is moved into that folder (valid under
+            drive.file; requires a connection granted Drive access).
 
     Returns:
         str: Confirmation message with form ID and edit URL.
@@ -168,7 +177,15 @@ async def create_form(
         "responderUri", f"https://docs.google.com/forms/d/{form_id}/viewform"
     )
 
-    confirmation_message = f"Successfully created form '{created_form.get('info', {}).get('title', title)}' for {user_google_email}. Form ID: {form_id}. Edit URL: {edit_url}. Responder URL: {responder_url}"
+    folder_note = ""
+    if parent_folder_id:
+        async with secondary_google_service(
+            "drive", "drive_file", "create_form", user_google_email
+        ) as drive_service:
+            await move_file_to_folder(drive_service, form_id, parent_folder_id)
+        folder_note = f" Folder: {parent_folder_id}."
+
+    confirmation_message = f"Successfully created form '{created_form.get('info', {}).get('title', title)}' for {user_google_email}. Form ID: {form_id}. Edit URL: {edit_url}. Responder URL: {responder_url}.{folder_note}"
     logger.info(f"Form created successfully for {user_google_email}. ID: {form_id}")
     return confirmation_message
 

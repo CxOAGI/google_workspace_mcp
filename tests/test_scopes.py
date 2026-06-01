@@ -28,16 +28,33 @@ from auth.scopes import (
     GMAIL_SETTINGS_BASIC_SCOPE,
     SHEETS_READONLY_SCOPE,
     SHEETS_WRITE_SCOPE,
+    SLIDES_SCOPE,
+    SLIDES_READONLY_SCOPE,
+    DOCS_READONLY_SCOPE,
+    DOCS_WRITE_SCOPE,
     get_scopes_for_tools,
     has_required_scopes,
     set_read_only,
+    set_drive_access_mode,
 )
 from auth.permissions import get_scopes_for_permission, set_permissions
 import auth.permissions as permissions_module
+import auth.scopes as scopes_module
+
+
+def _reset_drive_access_mode():
+    """Clear any explicit Drive-access-mode override so it resolves to default."""
+    scopes_module._DRIVE_ACCESS_MODE_OVERRIDE = None
 
 
 class TestDocsScopes:
-    """Tests for docs tool scope generation."""
+    """Tests for docs tool scope generation (full Drive-access mode)."""
+
+    def setup_method(self):
+        set_drive_access_mode("full")
+
+    def teardown_method(self):
+        _reset_drive_access_mode()
 
     def test_docs_includes_drive_readonly(self):
         """search_docs, get_doc_content, list_docs_in_folder need drive.readonly."""
@@ -56,7 +73,13 @@ class TestDocsScopes:
 
 
 class TestSheetsScopes:
-    """Tests for sheets tool scope generation."""
+    """Tests for sheets tool scope generation (full Drive-access mode)."""
+
+    def setup_method(self):
+        set_drive_access_mode("full")
+
+    def teardown_method(self):
+        _reset_drive_access_mode()
 
     def test_sheets_includes_drive_readonly(self):
         """list_spreadsheets needs drive.readonly."""
@@ -83,14 +106,211 @@ class TestCombinedScopes:
         assert len(scopes) == len(set(scopes))
 
 
-class TestReadOnlyScopes:
-    """Tests for read-only mode scope generation."""
+class TestDriveAccessModeFile:
+    """Tests for drive.file ("file") mode scope generation (the default)."""
+
+    def setup_method(self):
+        set_read_only(False)
+        set_drive_access_mode("file")
+
+    def teardown_method(self):
+        set_read_only(False)
+        _reset_drive_access_mode()
+
+    def _drive_family_resource_scopes(self, scopes):
+        broad = {
+            DRIVE_SCOPE,
+            DRIVE_READONLY_SCOPE,
+            SHEETS_WRITE_SCOPE,
+            SHEETS_READONLY_SCOPE,
+            SLIDES_SCOPE,
+            SLIDES_READONLY_SCOPE,
+            DOCS_WRITE_SCOPE,
+            DOCS_READONLY_SCOPE,
+        }
+        return broad.intersection(scopes)
+
+    def test_drive_family_collapses_to_drive_file(self):
+        """In file mode, drive/docs/sheets/slides request only drive.file."""
+        for tool in ["drive", "docs", "sheets", "slides"]:
+            scopes = get_scopes_for_tools([tool])
+            assert DRIVE_FILE_SCOPE in scopes, tool
+            assert not self._drive_family_resource_scopes(scopes), (
+                f"{tool} leaked broad Drive scopes in file mode"
+            )
+
+    def test_combined_drive_family_only_drive_file(self):
+        """Acceptance #1: combined Drive-family groups => exactly drive.file."""
+        scopes = get_scopes_for_tools(["drive", "docs", "sheets", "slides"])
+        assert not self._drive_family_resource_scopes(scopes)
+        assert DRIVE_FILE_SCOPE in scopes
+
+    def test_unrelated_scopes_unchanged_in_file_mode(self):
+        """Identity/Gmail/Calendar scopes are identical regardless of mode."""
+        scopes = get_scopes_for_tools(["gmail", "calendar"])
+        assert GMAIL_MODIFY_SCOPE in scopes
+        assert CALENDAR_SCOPE in scopes
+
+    def test_drive_file_satisfies_resource_requirements(self):
+        """Acceptance #5: a drive.file grant authorizes ID-addressed tools."""
+        available = [DRIVE_FILE_SCOPE]
+        for required in [
+            DOCS_READONLY_SCOPE,
+            DOCS_WRITE_SCOPE,
+            SHEETS_READONLY_SCOPE,
+            SHEETS_WRITE_SCOPE,
+            SLIDES_SCOPE,
+            DRIVE_READONLY_SCOPE,
+        ]:
+            assert has_required_scopes(available, [required])
+
+    def test_unknown_mode_fails_closed_to_file(self):
+        """Acceptance #3: an unrecognized mode behaves as file."""
+        set_drive_access_mode("nonsense")
+        scopes = get_scopes_for_tools(["docs"])
+        assert not self._drive_family_resource_scopes(scopes)
+        assert DRIVE_FILE_SCOPE in scopes
+
+
+class TestDriveAccessModeFull:
+    """full mode preserves the historical broad-scope behavior (acceptance #2)."""
+
+    def setup_method(self):
+        set_read_only(False)
+        set_drive_access_mode("full")
+
+    def teardown_method(self):
+        set_read_only(False)
+        _reset_drive_access_mode()
+
+    def test_drive_family_keeps_broad_scopes(self):
+        scopes = get_scopes_for_tools(["drive", "docs", "sheets", "slides"])
+        for expected in [
+            DRIVE_SCOPE,
+            SHEETS_WRITE_SCOPE,
+            SLIDES_SCOPE,
+            DOCS_WRITE_SCOPE,
+        ]:
+            assert expected in scopes
+
+    def test_drive_file_does_not_loosen_gate_in_full_mode(self):
+        """In full mode a drive.file grant must NOT satisfy broad requirements."""
+        assert not has_required_scopes([DRIVE_FILE_SCOPE], [DOCS_READONLY_SCOPE])
+        assert not has_required_scopes([DRIVE_FILE_SCOPE], [DRIVE_READONLY_SCOPE])
+
+
+class TestHardInvariantCrossMode:
+    """The hard invariant: non-Drive-family scopes are identical in both modes."""
+
+    NON_DRIVE_FAMILY = [
+        "gmail",
+        "calendar",
+        "chat",
+        "forms",
+        "tasks",
+        "contacts",
+        "search",
+        "appscript",
+    ]
 
     def setup_method(self):
         set_read_only(False)
 
     def teardown_method(self):
         set_read_only(False)
+        _reset_drive_access_mode()
+
+    def test_non_drive_family_scopes_identical_across_modes(self):
+        set_drive_access_mode("file")
+        file_scopes = set(get_scopes_for_tools(self.NON_DRIVE_FAMILY))
+        set_drive_access_mode("full")
+        full_scopes = set(get_scopes_for_tools(self.NON_DRIVE_FAMILY))
+        assert file_scopes == full_scopes
+
+    def test_non_drive_family_scopes_identical_across_modes_readonly(self):
+        set_read_only(True)
+        set_drive_access_mode("file")
+        file_scopes = set(get_scopes_for_tools(self.NON_DRIVE_FAMILY))
+        set_drive_access_mode("full")
+        full_scopes = set(get_scopes_for_tools(self.NON_DRIVE_FAMILY))
+        assert file_scopes == full_scopes
+
+    def test_only_drive_family_differs_between_modes(self):
+        """The full set differs ONLY by the broad Drive-family resource scopes."""
+        all_tools = self.NON_DRIVE_FAMILY + ["drive", "docs", "sheets", "slides"]
+        set_drive_access_mode("file")
+        file_scopes = set(get_scopes_for_tools(all_tools))
+        set_drive_access_mode("full")
+        full_scopes = set(get_scopes_for_tools(all_tools))
+        only_in_full = full_scopes - file_scopes
+        assert only_in_full == {
+            DRIVE_SCOPE,
+            DRIVE_READONLY_SCOPE,
+            SHEETS_WRITE_SCOPE,
+            SHEETS_READONLY_SCOPE,
+            SLIDES_SCOPE,
+            SLIDES_READONLY_SCOPE,
+            DOCS_WRITE_SCOPE,
+            DOCS_READONLY_SCOPE,
+        }
+        assert not (file_scopes - full_scopes)
+
+
+class TestGetDriveAccessModeResolution:
+    """Resolution precedence and fail-closed behavior of get_drive_access_mode."""
+
+    def teardown_method(self):
+        _reset_drive_access_mode()
+
+    def test_override_takes_precedence(self):
+        set_drive_access_mode("full")
+        assert scopes_module.get_drive_access_mode() == "full"
+        assert scopes_module.is_full_drive_access() is True
+
+    def test_primary_env_used_when_no_override(self, monkeypatch):
+        _reset_drive_access_mode()
+        monkeypatch.setenv("DRIVE_ACCESS_MODE", "full")
+        monkeypatch.delenv("WORKSPACE_MCP_DRIVE_ACCESS_MODE", raising=False)
+        assert scopes_module.get_drive_access_mode() == "full"
+
+    def test_primary_env_beats_alias(self, monkeypatch):
+        _reset_drive_access_mode()
+        monkeypatch.setenv("DRIVE_ACCESS_MODE", "full")
+        monkeypatch.setenv("WORKSPACE_MCP_DRIVE_ACCESS_MODE", "file")
+        assert scopes_module.get_drive_access_mode() == "full"
+
+    def test_alias_env_used_when_primary_absent(self, monkeypatch):
+        _reset_drive_access_mode()
+        monkeypatch.delenv("DRIVE_ACCESS_MODE", raising=False)
+        monkeypatch.setenv("WORKSPACE_MCP_DRIVE_ACCESS_MODE", "full")
+        assert scopes_module.get_drive_access_mode() == "full"
+
+    def test_unset_defaults_to_file(self, monkeypatch):
+        _reset_drive_access_mode()
+        monkeypatch.delenv("DRIVE_ACCESS_MODE", raising=False)
+        monkeypatch.delenv("WORKSPACE_MCP_DRIVE_ACCESS_MODE", raising=False)
+        assert scopes_module.get_drive_access_mode() == "file"
+
+    def test_malformed_env_fails_closed_to_file(self, monkeypatch):
+        _reset_drive_access_mode()
+        monkeypatch.setenv("DRIVE_ACCESS_MODE", "FULLISH")
+        assert scopes_module.get_drive_access_mode() == "file"
+
+    def test_set_unknown_fails_closed(self):
+        set_drive_access_mode("banana")
+        assert scopes_module.get_drive_access_mode() == "file"
+
+
+class TestReadOnlyScopes:
+    """Tests for read-only mode scope generation (full Drive-access mode)."""
+
+    def setup_method(self):
+        set_read_only(False)
+        set_drive_access_mode("full")
+
+    def teardown_method(self):
+        set_read_only(False)
+        _reset_drive_access_mode()
 
     def test_docs_readonly_includes_drive_readonly(self):
         """Even in read-only mode, docs needs drive.readonly for search/list."""
@@ -205,10 +425,12 @@ class TestGranularPermissionsScopes:
 
     def setup_method(self):
         set_read_only(False)
+        set_drive_access_mode("full")
         permissions_module._PERMISSIONS = None
 
     def teardown_method(self):
         set_read_only(False)
+        _reset_drive_access_mode()
         permissions_module._PERMISSIONS = None
 
     def test_permissions_mode_returns_base_plus_permission_scopes(self):

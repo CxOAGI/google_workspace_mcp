@@ -258,6 +258,7 @@ uv run main.py --transport streamable-http --tools gmail drive calendar
 | `WORKSPACE_MCP_TOOL_TIER` | | `core`, `extended`, or `complete`; empty means all tools |
 | `WORKSPACE_MCP_READ_ONLY` | | `true`, `1`, or `yes` to request read-only scopes and filter write tools |
 | `WORKSPACE_MCP_PERMISSIONS` | | Space-separated `service:level` entries, e.g. `gmail:send drive:readonly`; mutually exclusive with tools and read-only |
+| `DRIVE_ACCESS_MODE` (alias `WORKSPACE_MCP_DRIVE_ACCESS_MODE`) | `file` | `file` or `full`. Governs the drive/sheets/slides/docs groups — see [Drive access mode](#drive-access-mode-drivefile-vs-full-drive). Unknown/empty fails closed to `file`. |
 | **🔑 OAuth 2.1 & Multi-User** | | |
 | `MCP_ENABLE_OAUTH21` | | `true` to enable OAuth 2.1 multi-user support |
 | `EXTERNAL_OAUTH21_PROVIDER` | | `true` for external OAuth flow with bearer tokens |
@@ -511,6 +512,34 @@ Granular permissions mode provides service-by-service scope control:
 - With `--tool-tier`, only tier-matched tools are enabled and only services that have tools in the selected tier are imported
 
 The `WORKSPACE_MCP_TOOLS`, `WORKSPACE_MCP_TOOL_TIER`, `WORKSPACE_MCP_READ_ONLY`, and `WORKSPACE_MCP_PERMISSIONS` environment variables provide the same controls for plugin and container installs. Empty strings are ignored. Non-empty malformed values fail closed at startup. Explicit CLI flags take precedence over mutually exclusive env vars.
+
+### Drive access mode (`drive.file` vs full Drive)
+
+```bash
+# Default: per-file access only (drive.file). Safe for shared/platform OAuth apps.
+uv run main.py
+
+# Full Drive access + cross-Drive discovery tools (self-hosted / BYO-OAuth).
+uv run main.py --drive-access-mode full
+# Equivalent via env var:
+DRIVE_ACCESS_MODE=full uv run main.py
+```
+
+`DRIVE_ACCESS_MODE` selects the OAuth scope and tool profile for the **drive, sheets, slides, and docs** tool groups. It does **not** affect Gmail, Calendar, Chat, Forms, Tasks, Contacts, Search/CSE, or Apps Script — those scopes are identical in both modes.
+
+| | `file` (default, fail-closed) | `full` |
+|---|---|---|
+| Drive-family resource scope requested | only `https://www.googleapis.com/auth/drive.file` | `drive`, `drive.readonly`, `drive.file`, `spreadsheets(.readonly)`, `presentations(.readonly)`, `documents(.readonly)` |
+| Cross-Drive discovery tools (`search_drive_files`, `list_drive_items`, `search_docs`, `list_docs_in_folder`, `list_spreadsheets`) | **not registered** (they return empty/misleading results under `drive.file`) | registered |
+| ID-addressed read/write tools (e.g. `get_doc_content`, `read_sheet_values`, `modify_sheet_values`, `update_drive_file`) | registered; operate on app-created or user-picked files | registered |
+| `create_*` tools with `parent_folder_id` | available | available |
+
+- **`file` mode** is for platform-managed / shared OAuth apps that use a non-sensitive `drive.file` grant. Files are made accessible per-file (e.g. via a Google Picker in the host app); there is no Drive-wide search.
+- **`full` mode** is for self-hosted / BYO-OAuth deployments that own their OAuth client and need Drive-wide discovery/search.
+- An unknown or empty value (CLI or env) **fails closed to `file`**. The CLI flag takes precedence over the env vars.
+
+> [!IMPORTANT]
+> The scope set this server requests on token refresh must exactly match what the OAuth grant authorized for the connection. When integrating with a platform that pre-grants scopes, set `DRIVE_ACCESS_MODE` to match the grant (platform/`drive.file` connections → `file`; BYO connections → `full`), or token refresh will fail with `invalid_scope`. The complete requested-scope set for each mode is listed in `docs/DRIVE_ACCESS_MODE.md`.
 
 **Advanced legacy stdio sidecar**
 ```bash

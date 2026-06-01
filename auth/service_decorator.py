@@ -7,7 +7,7 @@ import os
 import re
 from functools import wraps
 from typing import Dict, List, Optional, Any, Callable, Union, Tuple
-from contextlib import ExitStack
+from contextlib import ExitStack, asynccontextmanager
 
 from google.auth.exceptions import RefreshError
 from google.oauth2 import service_account as google_service_account
@@ -326,6 +326,86 @@ async def _authenticate_service(
             required_scopes=resolved_scopes,
             session_id=mcp_session_id,
         )
+
+
+async def get_secondary_google_service(
+    service_type: str,
+    scopes: Union[str, List[str]],
+    tool_name: str,
+    user_google_email: str,
+    version: Optional[str] = None,
+) -> Tuple[Any, str]:
+    """
+    Authenticate an additional Google service from inside a running tool,
+    reusing the current request's auth context.
+
+    Intended for tools whose @require_google_service injects one primary service
+    but that need a second service only on a specific code path - e.g. a Drive
+    files.update move after creating a Doc/Slides/Form. Authenticating lazily
+    keeps the common path working when the extra service's scope was not granted
+    for the connection.
+
+    Returns (service, actual_user_email). The caller is responsible for closing
+    the returned service.
+    """
+    if service_type not in SERVICE_CONFIGS:
+        raise Exception(f"Unknown service type: {service_type}")
+
+    config = SERVICE_CONFIGS[service_type]
+    service_name = config["service"]
+    service_version = version or config["version"]
+    resolved_scopes = _resolve_scopes(scopes)
+
+    authenticated_user, _auth_method, mcp_session_id = await _get_auth_context(
+        tool_name
+    )
+    use_oauth21 = _detect_oauth_version(authenticated_user, mcp_session_id, tool_name)
+
+    # In OAuth 2.1 the authenticated identity is authoritative.
+    if is_oauth21_enabled() and authenticated_user:
+        user_google_email = authenticated_user
+
+    return await _authenticate_service(
+        use_oauth21,
+        service_name,
+        service_version,
+        tool_name,
+        user_google_email,
+        resolved_scopes,
+        mcp_session_id,
+        authenticated_user,
+    )
+
+
+@asynccontextmanager
+async def secondary_google_service(
+    service_type: str,
+    scopes: Union[str, List[str]],
+    tool_name: str,
+    user_google_email: str,
+    version: Optional[str] = None,
+):
+    """
+    Async context manager around get_secondary_google_service that guarantees the
+    service is closed and its reference cycles released on exit - matching the
+    cleanup the primary @require_google_service wrapper performs. Prefer this over
+    calling get_secondary_google_service directly so call sites cannot diverge.
+
+    Usage:
+        async with secondary_google_service(
+            "drive", "drive_file", "create_doc", user_google_email
+        ) as drive_service:
+            await move_file_to_folder(drive_service, doc_id, parent_folder_id)
+    """
+    service, _email = await get_secondary_google_service(
+        service_type, scopes, tool_name, user_google_email, version
+    )
+    try:
+        yield service
+    finally:
+        if service:
+            service.close()
+            _release_google_service_cycles()
 
 
 async def get_authenticated_google_service_oauth21(
