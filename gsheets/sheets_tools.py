@@ -13,7 +13,7 @@ from typing import List, Optional, Union
 from mcp.types import ToolAnnotations
 
 from auth.service_decorator import require_google_service
-from core.server import server
+from core.server import server, full_drive_access_tool
 from core.utils import handle_http_errors, UserInputError, StringList
 from core.comments import create_comment_tools
 from gsheets.sheets_helpers import (
@@ -40,7 +40,7 @@ from gsheets.sheets_helpers import (
 logger = logging.getLogger(__name__)
 
 
-@server.tool(
+@full_drive_access_tool(
     title="List Spreadsheets",
     annotations=ToolAnnotations(
         readOnlyHint=True,

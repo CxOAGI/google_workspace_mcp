@@ -22,7 +22,11 @@ from core.tool_registry import (
     wrap_server_tool_method,
     filter_server_tools,
 )
-from auth.scopes import set_enabled_tools
+from auth.scopes import (
+    set_enabled_tools,
+    set_drive_access_mode,
+    get_drive_access_mode,
+)
 
 
 def enforce_fastmcp_cloud_defaults():
@@ -137,6 +141,27 @@ else:
 
 # Set transport mode for HTTP (FastMCP CLI defaults to streamable-http)
 set_transport_mode("streamable-http")
+
+# Resolve the Drive access mode BEFORE importing tool modules, so that
+# mode-conditional tool registration (Drive-family discovery tools) observes it.
+# Mirror main.py: validate the env value, fail closed to "file", and log the
+# resolved mode so both entrypoints behave and report identically.
+_raw_drive_mode = (
+    (
+        os.environ.get("DRIVE_ACCESS_MODE", "")
+        or os.environ.get("WORKSPACE_MCP_DRIVE_ACCESS_MODE", "")
+    )
+    .strip()
+    .lower()
+)
+if _raw_drive_mode and _raw_drive_mode not in {"file", "full"}:
+    logger.warning(
+        "Invalid DRIVE_ACCESS_MODE %r; expected 'file' or 'full'. Failing closed to 'file'.",
+        _raw_drive_mode,
+    )
+    _raw_drive_mode = "file"
+set_drive_access_mode(_raw_drive_mode or "file")
+logger.info("Drive access mode: %s", get_drive_access_mode())
 
 # Import all tool modules to register their @server.tool() decorators
 import gmail.gmail_tools

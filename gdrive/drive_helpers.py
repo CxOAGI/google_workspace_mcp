@@ -384,3 +384,38 @@ async def resolve_folder_id(
             f"Resolved ID '{resolved_id}' (from '{folder_id}') is not a folder; mimeType={mime_type}."
         )
     return resolved_id
+
+
+async def move_file_to_folder(
+    drive_service,
+    file_id: str,
+    parent_folder_id: str,
+) -> str:
+    """
+    Move a Drive file into the given folder, detaching it from its current
+    parents (e.g. the root). Used by create tools (Docs/Slides/Forms) whose
+    native APIs cannot set a parent at creation time.
+
+    Valid under the drive.file scope: the app created the file and the folder is
+    a granted ID. Returns the resolved destination folder ID.
+    """
+    resolved_parent = await resolve_folder_id(drive_service, parent_folder_id)
+
+    current = await asyncio.to_thread(
+        drive_service.files()
+        .get(fileId=file_id, fields="parents", supportsAllDrives=True)
+        .execute
+    )
+    previous_parents = ",".join(current.get("parents", []) or [])
+
+    update_kwargs = {
+        "fileId": file_id,
+        "addParents": resolved_parent,
+        "fields": "id, parents",
+        "supportsAllDrives": True,
+    }
+    if previous_parents:
+        update_kwargs["removeParents"] = previous_parents
+
+    await asyncio.to_thread(drive_service.files().update(**update_kwargs).execute)
+    return resolved_parent

@@ -509,6 +509,55 @@ def encode_image_content(file_bytes: bytes, mime_type: str) -> str:
     return f"[base64_image:{mime_type}]{encoded}"
 
 
+# Google services whose tools address a top-level Drive file by ID. A 404
+# notFound (or file-level 403) from these means the app was never granted access
+# to that file (e.g. under the drive.file scope, a file it neither created nor
+# the user picked). Deliberately EXCLUDES forms/script: those tools also address
+# non-Drive sub-resources by ID (form responses, script versions/deployments),
+# whose genuine 404s must NOT be rewritten into a "pick the file" message - there
+# is no Drive file to pick, and the picker can never resolve them.
+_FILE_TARGETING_SERVICES = frozenset({"drive", "docs", "sheets", "slides"})
+
+# kwargs that carry the offending Drive resource ID, in priority order, so the
+# translated message can name the specific file/folder to (re)grant.
+_RESOURCE_ID_KWARGS = (
+    "file_id",
+    "folder_id",
+    "document_id",
+    "presentation_id",
+    "spreadsheet_id",
+    "parent_folder_id",
+)
+
+
+def _is_file_not_connected_error(status: int, error_details: str) -> bool:
+    """
+    Detect the "file/folder not connected to the app" case: an explicit Drive
+    file ID the app cannot access. True only for the not-granted case (404
+    notFound or a file-level 403), not for general auth/scope failures.
+    """
+    blob = error_details.lower()
+    if status == 404:
+        # Only a Drive-style notFound counts. Guard against unrelated 404s
+        # (e.g. a wrong API endpoint) that lack a notFound reason.
+        return "notfound" in blob or "not found" in blob
+    if status == 403 and (
+        "insufficientfilepermissions" in blob
+        or "the user does not have sufficient permissions for file" in blob
+    ):
+        return True
+    return False
+
+
+def _extract_resource_id(kwargs: dict) -> Optional[str]:
+    """Best-effort extraction of the Drive resource ID from tool kwargs."""
+    for key in _RESOURCE_ID_KWARGS:
+        value = kwargs.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 def handle_http_errors(
     tool_name: str, is_read_only: bool = False, service_type: Optional[str] = None
 ):
@@ -579,6 +628,39 @@ def handle_http_errors(
                                 f"API error in {tool_name}: {error}. "
                                 f"The required API is not enabled for your project. "
                                 f"Please check the Google Cloud Console to enable it."
+                            )
+                    elif (
+                        service_type in _FILE_TARGETING_SERVICES
+                        and _is_file_not_connected_error(
+                            error.resp.status, error_details
+                        )
+                    ):
+                        # The tool was given an explicit Drive file ID the app
+                        # cannot access. The remediation depends on the access
+                        # mode: under drive.file ("file" mode) the file was simply
+                        # never created by the app nor picked by the user, so the
+                        # Drive Picker is the fix; in full mode the ID is genuinely
+                        # inaccessible, trashed, or deleted, and the picker grants
+                        # nothing - so don't send the agent into a no-op loop.
+                        from auth.scopes import is_full_drive_access
+
+                        resource_id = _extract_resource_id(kwargs)
+                        id_phrase = f" '{resource_id}'" if resource_id else ""
+                        if not is_full_drive_access():
+                            message = (
+                                f"API error in {tool_name}: This file{id_phrase} "
+                                f"isn't connected to the app (Google returned "
+                                f"{error.resp.status}). Ask the user to select it "
+                                f"via the Drive file picker, then retry. "
+                                f"LLM: Do not retry with the same ID until the user "
+                                f"has granted access via the picker."
+                            )
+                        else:
+                            message = (
+                                f"API error in {tool_name}: The file/folder"
+                                f"{id_phrase} isn't accessible (Google returned "
+                                f"{error.resp.status}) - it may not exist, be "
+                                f"trashed, or you may lack permission. {error}"
                             )
                     elif error.resp.status in [401, 403]:
                         # Authentication/authorization errors

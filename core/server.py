@@ -166,6 +166,33 @@ auth_info_middleware = AuthInfoMiddleware()
 server.add_middleware(auth_info_middleware)
 
 
+def full_drive_access_tool(*tool_args, **tool_kwargs):
+    """
+    Tool decorator that only registers the tool when DRIVE_ACCESS_MODE is 'full'.
+
+    Used to gate cross-Drive discovery tools (search/list-by-name) that rely on
+    broad Drive scopes. In drive.file ("file") mode these tools would return
+    empty/misleading results, so they are left unregistered (the underlying
+    function is returned unchanged so it remains importable/testable).
+
+    The mode is evaluated when the decorator is applied (at tool-module import
+    time), after main.py / fastmcp_server.py have resolved the access mode.
+    """
+    from auth.scopes import is_full_drive_access
+
+    if is_full_drive_access():
+        return server.tool(*tool_args, **tool_kwargs)
+
+    def _skip_registration(func):
+        logger.debug(
+            "Skipping registration of '%s' (drive.file mode)",
+            getattr(func, "__name__", "<tool>"),
+        )
+        return func
+
+    return _skip_registration
+
+
 def _parse_bool_env(value: str) -> bool:
     """Parse environment variable string to boolean."""
     return value.lower() in ("1", "true", "yes", "on")

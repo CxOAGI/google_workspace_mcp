@@ -6,11 +6,15 @@ This module provides MCP tools for interacting with Google Slides API.
 
 import logging
 import asyncio
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from mcp.types import ToolAnnotations
 
-from auth.service_decorator import require_google_service
+from auth.service_decorator import (
+    require_google_service,
+    secondary_google_service,
+)
+from gdrive.drive_helpers import move_file_to_folder
 from core.server import server
 from core.utils import handle_http_errors
 from core.comments import create_comment_tools
@@ -34,7 +38,10 @@ logger = logging.getLogger(__name__)
 @handle_http_errors("create_presentation", service_type="slides")
 @require_google_service("slides", "slides")
 async def create_presentation(
-    service, user_google_email: str, title: str = "Untitled Presentation"
+    service,
+    user_google_email: str,
+    title: str = "Untitled Presentation",
+    parent_folder_id: Optional[str] = None,
 ) -> str:
     """
     Create a new Google Slides presentation.
@@ -42,6 +49,10 @@ async def create_presentation(
     Args:
         user_google_email (str): The user's Google email address. Required.
         title (str): The title for the new presentation. Defaults to "Untitled Presentation".
+        parent_folder_id (Optional[str]): Optional Drive folder ID to create the
+            presentation in. When omitted, it is created in My Drive root. When
+            provided, the new presentation is moved into that folder (valid under
+            drive.file).
 
     Returns:
         str: Details about the created presentation including ID and URL.
@@ -57,10 +68,18 @@ async def create_presentation(
     presentation_id = result.get("presentationId")
     presentation_url = f"https://docs.google.com/presentation/d/{presentation_id}/edit"
 
+    folder_note = ""
+    if parent_folder_id:
+        async with secondary_google_service(
+            "drive", "drive_file", "create_presentation", user_google_email
+        ) as drive_service:
+            await move_file_to_folder(drive_service, presentation_id, parent_folder_id)
+        folder_note = f"\n- Folder: {parent_folder_id}"
+
     confirmation_message = f"""Presentation Created Successfully for {user_google_email}:
 - Title: {title}
 - Presentation ID: {presentation_id}
-- URL: {presentation_url}
+- URL: {presentation_url}{folder_note}
 - Slides: {len(result.get("slides", []))} slide(s) created"""
 
     logger.info(f"Presentation created successfully for {user_google_email}")

@@ -33,7 +33,7 @@ from core.utils import (
     handle_http_errors,
     validate_file_path,
 )
-from core.server import server
+from core.server import server, full_drive_access_tool
 from core.config import get_transport_mode
 from core.http_utils import (
     redact_url as _redact_url,
@@ -130,7 +130,7 @@ async def _get_file_size(file_obj: BinaryIO) -> int:
     return await asyncio.to_thread(_measure_size)
 
 
-@server.tool(
+@full_drive_access_tool(
     title="Search Drive Files",
     annotations=ToolAnnotations(
         readOnlyHint=True,
@@ -563,7 +563,7 @@ async def get_drive_file_download_url(
         )
 
 
-@server.tool(
+@full_drive_access_tool(
     title="List Drive Items",
     annotations=ToolAnnotations(
         readOnlyHint=True,

@@ -19,14 +19,19 @@ from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 from mcp.types import ToolAnnotations
 
 # Auth & server utilities
-from auth.service_decorator import require_google_service, require_multiple_services
+from auth.service_decorator import (
+    require_google_service,
+    require_multiple_services,
+    secondary_google_service,
+)
+from gdrive.drive_helpers import move_file_to_folder
 from core.utils import (
     GOOGLE_API_WRITE_RETRIES,
     extract_office_xml_text,
     handle_http_errors,
     UserInputError,
 )
-from core.server import server
+from core.server import server, full_drive_access_tool
 from core.comments import create_comment_tools
 
 # Import helper functions for document operations
@@ -75,7 +80,7 @@ logger = logging.getLogger(__name__)
 HEADER_FOOTER_RUNTIME_CANARY = "docs-hf-canary-20260328b"
 
 
-@server.tool(
+@full_drive_access_tool(
     title="Search Docs",
     annotations=ToolAnnotations(
         readOnlyHint=True,
@@ -329,7 +334,7 @@ async def get_doc_content(
     return header + body_text
 
 
-@server.tool(
+@full_drive_access_tool(
     title="List Docs in Folder",
     annotations=ToolAnnotations(
         readOnlyHint=True,
@@ -391,6 +396,7 @@ async def create_doc(
     user_google_email: str,
     title: str,
     content: str = "",
+    parent_folder_id: Optional[str] = None,
 ) -> str:
     """
     Creates a new Google Doc and optionally inserts initial content.
@@ -407,6 +413,9 @@ async def create_doc(
         user_google_email: User's Google email address
         title: Title of the new document
         content: Optional initial plain text content to insert
+        parent_folder_id: Optional Drive folder ID to create the document in.
+            When omitted, the document is created in My Drive root. When provided,
+            the new document is moved into that folder (valid under drive.file).
 
     Returns:
         str: Confirmation message with document ID, link, and initial document state.
@@ -424,13 +433,22 @@ async def create_doc(
             .batchUpdate(documentId=doc_id, body={"requests": requests})
             .execute
         )
+
+    folder_note = ""
+    if parent_folder_id:
+        async with secondary_google_service(
+            "drive", "drive_file", "create_doc", user_google_email
+        ) as drive_service:
+            await move_file_to_folder(drive_service, doc_id, parent_folder_id)
+        folder_note = f" in folder {parent_folder_id}"
+
     link = f"https://docs.google.com/document/d/{doc_id}/edit"
     if content:
         content_note = f"Initial content: {len(content)} characters inserted."
     else:
         content_note = "Document is empty (body starts at index 1, total length 2)."
     msg = (
-        f"Created Google Doc '{title}' (ID: {doc_id}) for {user_google_email}. "
+        f"Created Google Doc '{title}' (ID: {doc_id}){folder_note} for {user_google_email}. "
         f"{content_note} "
         f"Use batch_update_doc with end_of_segment=true to append content. "
         f"Link: {link}"

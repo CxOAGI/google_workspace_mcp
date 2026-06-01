@@ -249,6 +249,18 @@ def main():
         help="Run in read-only mode - requests only read-only scopes and disables tools requiring write permissions",
     )
     parser.add_argument(
+        "--drive-access-mode",
+        choices=["file", "full"],
+        default=None,
+        help=(
+            "Drive access profile for the drive/sheets/slides/docs groups. "
+            "'file' (default) requests only the per-file drive.file scope and "
+            "hides cross-Drive discovery tools (search/list); 'full' requests the "
+            "broad Drive scopes and registers discovery tools. Overridable via "
+            "DRIVE_ACCESS_MODE / WORKSPACE_MCP_DRIVE_ACCESS_MODE. Defaults to 'file'."
+        ),
+    )
+    parser.add_argument(
         "--permissions",
         nargs="+",
         metavar="SERVICE:LEVEL",
@@ -343,6 +355,24 @@ def main():
         else:
             args.transport = "stdio"
 
+    # Drive access mode: CLI flag wins; otherwise fall back to env vars.
+    # Unknown/missing values fail closed to 'file' (handled in auth.scopes).
+    if args.drive_access_mode is None:
+        _env_drive_mode = (
+            (
+                os.getenv("DRIVE_ACCESS_MODE", "")
+                or os.getenv("WORKSPACE_MCP_DRIVE_ACCESS_MODE", "")
+            )
+            .strip()
+            .lower()
+        )
+        if _env_drive_mode:
+            if _env_drive_mode not in {"file", "full"}:
+                _exit_with_env_error(
+                    "DRIVE_ACCESS_MODE", _env_drive_mode, "file or full"
+                )
+            args.drive_access_mode = _env_drive_mode
+
     _env_http_port = os.getenv("WORKSPACE_MCP_HTTP_PORT", "").strip()
     http_port = None
     if _env_http_port:
@@ -399,6 +429,11 @@ def main():
         safe_print("   🔒 Read-Only: Enabled")
     if args.permissions:
         safe_print("   🔒 Permissions: Granular mode")
+    _drive_mode = args.drive_access_mode or "file"
+    if _drive_mode == "full":
+        safe_print("   📁 Drive Access: Full (broad Drive scopes + discovery tools)")
+    else:
+        safe_print("   📁 Drive Access: File (drive.file only; discovery tools hidden)")
     safe_print(f"   🐍 Python: {sys.version.split()[0]}")
     safe_print("")
 
@@ -532,11 +567,15 @@ def main():
 
     wrap_server_tool_method(server)
 
-    from auth.scopes import set_enabled_tools, set_read_only
+    from auth.scopes import set_enabled_tools, set_read_only, set_drive_access_mode
 
     set_enabled_tools(list(tools_to_import))
     if args.read_only:
         set_read_only(True)
+    # Set the Drive access mode before importing tool modules so that
+    # mode-conditional tool registration (Drive-family discovery tools) and
+    # scope resolution observe the resolved mode. Defaults to 'file'.
+    set_drive_access_mode(args.drive_access_mode)
 
     safe_print(
         f"🛠️  Loading {len(tools_to_import)} tool module{'s' if len(tools_to_import) != 1 else ''}:"

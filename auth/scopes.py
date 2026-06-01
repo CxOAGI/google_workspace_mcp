@@ -6,11 +6,76 @@ Separated from service_decorator.py to avoid circular imports.
 """
 
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
 # Global variable to store enabled tools (set by main.py)
 _ENABLED_TOOLS = None
+
+# ---------------------------------------------------------------------------
+# Drive access mode (drive.file vs full-Drive)
+#
+# Governs whether the Drive-family tool groups (drive, sheets, slides, docs)
+# request the broad Drive-resource scopes or only the per-file
+# https://www.googleapis.com/auth/drive.file scope.
+#
+#   "file" (default, fail-closed): only drive.file is requested for the
+#       Drive-family groups. Used by the platform-managed (SaaS) OAuth app,
+#       where file access is granted per-file via the Google Picker.
+#   "full": preserves the historical behavior - broad drive/spreadsheets/
+#       presentations/documents scopes (+ readonly expansions). Used by
+#       self-hosted / BYO-OAuth deployments that own their OAuth client.
+#
+# A missing or unrecognized value resolves to "file" (fail closed).
+# Sourced from the --drive-access-mode CLI flag (via set_drive_access_mode)
+# or the DRIVE_ACCESS_MODE / WORKSPACE_MCP_DRIVE_ACCESS_MODE env vars.
+# ---------------------------------------------------------------------------
+DRIVE_ACCESS_MODE_FILE = "file"
+DRIVE_ACCESS_MODE_FULL = "full"
+
+# Explicit override set by the CLI flag in main.py (takes precedence over env).
+_DRIVE_ACCESS_MODE_OVERRIDE = None
+
+
+def _normalize_drive_access_mode(value) -> str:
+    """Normalize any input to 'full' or 'file' (fail closed to 'file')."""
+    if value is not None and str(value).strip().lower() == DRIVE_ACCESS_MODE_FULL:
+        return DRIVE_ACCESS_MODE_FULL
+    return DRIVE_ACCESS_MODE_FILE
+
+
+def set_drive_access_mode(mode) -> None:
+    """
+    Set the global Drive access mode (typically from the --drive-access-mode CLI flag).
+
+    Args:
+        mode: 'full' or 'file'. Anything else fails closed to 'file'.
+    """
+    global _DRIVE_ACCESS_MODE_OVERRIDE
+    _DRIVE_ACCESS_MODE_OVERRIDE = _normalize_drive_access_mode(mode)
+    logger.info(f"Drive access mode set to: {_DRIVE_ACCESS_MODE_OVERRIDE}")
+
+
+def get_drive_access_mode() -> str:
+    """
+    Return the active Drive access mode ('full' or 'file').
+
+    Resolution order: explicit CLI override -> DRIVE_ACCESS_MODE env var ->
+    WORKSPACE_MCP_DRIVE_ACCESS_MODE env var -> 'file' (default, fail closed).
+    """
+    if _DRIVE_ACCESS_MODE_OVERRIDE is not None:
+        return _DRIVE_ACCESS_MODE_OVERRIDE
+    env_val = os.getenv("DRIVE_ACCESS_MODE") or os.getenv(
+        "WORKSPACE_MCP_DRIVE_ACCESS_MODE"
+    )
+    return _normalize_drive_access_mode(env_val)
+
+
+def is_full_drive_access() -> bool:
+    """True when broad Drive-family scopes/tools are enabled (full mode)."""
+    return get_drive_access_mode() == DRIVE_ACCESS_MODE_FULL
+
 
 # Individual OAuth Scope Constants
 USERINFO_EMAIL_SCOPE = "https://www.googleapis.com/auth/userinfo.email"
@@ -57,6 +122,29 @@ FORMS_RESPONSES_READONLY_SCOPE = (
 # Google Slides API scopes
 SLIDES_SCOPE = "https://www.googleapis.com/auth/presentations"
 SLIDES_READONLY_SCOPE = "https://www.googleapis.com/auth/presentations.readonly"
+
+# Broad Drive-resource scopes for the Drive-family tool groups (drive, sheets,
+# slides, docs). In drive.file ("file") mode these are collapsed to
+# DRIVE_FILE_SCOPE for the in-scope groups, and a drive.file grant is treated as
+# satisfying them at the per-tool authorization check (the Drive/Docs/Sheets/
+# Slides APIs accept a drive.file token for app-created or picked files).
+# NOTE: This set intentionally excludes DRIVE_FILE_SCOPE itself and does not
+# affect the Apps Script group, which keeps its own Drive scopes unchanged.
+DRIVE_RESOURCE_SCOPES = frozenset(
+    {
+        DRIVE_SCOPE,
+        DRIVE_READONLY_SCOPE,
+        SHEETS_WRITE_SCOPE,
+        SHEETS_READONLY_SCOPE,
+        SLIDES_SCOPE,
+        SLIDES_READONLY_SCOPE,
+        DOCS_WRITE_SCOPE,
+        DOCS_READONLY_SCOPE,
+    }
+)
+
+# Tool groups whose Drive-resource scopes are governed by DRIVE_ACCESS_MODE.
+DRIVE_FAMILY_TOOLS = frozenset({"drive", "sheets", "slides", "docs"})
 
 # Google Tasks API scopes
 TASKS_SCOPE = "https://www.googleapis.com/auth/tasks"
@@ -129,6 +217,13 @@ def has_required_scopes(available_scopes, required_scopes):
     for broad_scope, covered in SCOPE_HIERARCHY.items():
         if broad_scope in available:
             expanded.update(covered)
+    # In drive.file ("file") mode, a drive.file grant is the effective
+    # Drive-resource scope: the Drive/Docs/Sheets/Slides APIs operate on
+    # app-created or user-picked files with it. Treat it as satisfying the
+    # broad Drive-family resource scopes so ID-addressed read/write tools
+    # (which still declare e.g. documents.readonly) pass authorization.
+    if not is_full_drive_access() and DRIVE_FILE_SCOPE in available:
+        expanded.update(DRIVE_RESOURCE_SCOPES)
     return all(scope in expanded for scope in required)
 
 
@@ -333,10 +428,23 @@ def get_scopes_for_tools(enabled_tools=None):
     scope_map = TOOL_READONLY_SCOPES_MAP if _READ_ONLY_MODE else TOOL_SCOPES_MAP
     mode_str = "read-only" if _READ_ONLY_MODE else "full"
 
+    # In drive.file mode, collapse the broad Drive-resource scopes for the
+    # Drive-family groups (drive/sheets/slides/docs) down to drive.file. Other
+    # groups - including Apps Script, which keeps its own Drive scopes - are
+    # left untouched so their requested scopes are identical in both modes.
+    collapse_drive = not is_full_drive_access()
+
     # Add scopes for each enabled tool
     for tool in enabled_tools:
-        if tool in scope_map:
-            scopes.extend(scope_map[tool])
+        if tool not in scope_map:
+            continue
+        tool_scopes = scope_map[tool]
+        if collapse_drive and tool in DRIVE_FAMILY_TOOLS:
+            tool_scopes = [
+                DRIVE_FILE_SCOPE if s in DRIVE_RESOURCE_SCOPES else s
+                for s in tool_scopes
+            ]
+        scopes.extend(tool_scopes)
 
     logger.debug(
         f"Generated {mode_str} scopes for tools {list(enabled_tools)}: {len(set(scopes))} unique scopes"
