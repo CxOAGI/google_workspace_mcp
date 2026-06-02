@@ -46,9 +46,11 @@ from gdrive.drive_helpers import (
     check_public_link_permission,
     format_permission_info,
     get_drive_image_url,
+    resolve_destination_folder_id,
     resolve_drive_item,
     resolve_file_type_mime,
     resolve_folder_id,
+    resolve_target_item,
     validate_expiration_time,
     validate_share_role,
     validate_share_type,
@@ -823,7 +825,7 @@ async def _create_drive_folder_impl(
     parent_folder_id: str = "root",
 ) -> str:
     """Internal implementation for create_drive_folder. Used by tests."""
-    resolved_folder_id = await resolve_folder_id(service, parent_folder_id)
+    resolved_folder_id = await resolve_destination_folder_id(service, parent_folder_id)
     file_metadata = {
         "name": folder_name,
         "parents": [resolved_folder_id],
@@ -931,7 +933,7 @@ async def create_drive_file(
         )
 
     file_data = None
-    resolved_folder_id = await resolve_folder_id(service, folder_id)
+    resolved_folder_id = await resolve_destination_folder_id(service, folder_id)
 
     file_metadata = {
         "name": file_name,
@@ -1249,7 +1251,7 @@ async def import_to_google_doc(
     doc_name = Path(file_name).stem if Path(file_name).suffix else file_name
 
     # Resolve folder
-    resolved_folder_id = await resolve_folder_id(service, folder_id)
+    resolved_folder_id = await resolve_destination_folder_id(service, folder_id)
 
     # File metadata - destination is Google Docs format
     file_metadata = {
@@ -1695,7 +1697,7 @@ async def update_drive_file(
         "name, description, mimeType, parents, starred, trashed, webViewLink, "
         "writersCanShare, copyRequiresWriterPermission, properties"
     )
-    resolved_file_id, current_file = await resolve_drive_item(
+    resolved_file_id, current_file = await resolve_target_item(
         service,
         file_id,
         extra_fields=current_file_fields,
@@ -1730,7 +1732,7 @@ async def update_drive_file(
 
         resolved_ids = []
         for parent in parent_ids:
-            resolved_parent = await resolve_folder_id(service, parent)
+            resolved_parent = await resolve_destination_folder_id(service, parent)
             resolved_ids.append(resolved_parent)
         return ",".join(resolved_ids)
 
@@ -1760,7 +1762,7 @@ async def update_drive_file(
 
     # Build response message
     output_parts = [
-        f"✅ Successfully updated file: {updated_file.get('name', current_file['name'])}"
+        f"✅ Successfully updated file: {updated_file.get('name') or current_file.get('name', 'Unknown')}"
     ]
     output_parts.append(f"   File ID: {file_id}")
 
@@ -1986,7 +1988,7 @@ async def manage_drive_access(
                 "share_with (domain name) is required for share_type 'domain'"
             )
 
-        resolved_file_id, file_metadata = await resolve_drive_item(
+        resolved_file_id, file_metadata = await resolve_target_item(
             service, file_id, extra_fields="name, webViewLink"
         )
         file_id = resolved_file_id
@@ -2038,7 +2040,7 @@ async def manage_drive_access(
         if not recipients:
             raise ValueError("recipients list is required for 'grant_batch' action")
 
-        resolved_file_id, file_metadata = await resolve_drive_item(
+        resolved_file_id, file_metadata = await resolve_target_item(
             service, file_id, extra_fields="name, webViewLink"
         )
         file_id = resolved_file_id
@@ -2149,7 +2151,7 @@ async def manage_drive_access(
         if expiration_time:
             validate_expiration_time(expiration_time)
 
-        resolved_file_id, file_metadata = await resolve_drive_item(
+        resolved_file_id, file_metadata = await resolve_target_item(
             service, file_id, extra_fields="name"
         )
         file_id = resolved_file_id
@@ -2198,7 +2200,7 @@ async def manage_drive_access(
         if not permission_id:
             raise ValueError("permission_id is required for 'revoke' action")
 
-        resolved_file_id, file_metadata = await resolve_drive_item(
+        resolved_file_id, file_metadata = await resolve_target_item(
             service, file_id, extra_fields="name"
         )
         file_id = resolved_file_id
@@ -2226,7 +2228,7 @@ async def manage_drive_access(
     if not new_owner_email:
         raise ValueError("new_owner_email is required for 'transfer_owner' action")
 
-    resolved_file_id, file_metadata = await resolve_drive_item(
+    resolved_file_id, file_metadata = await resolve_target_item(
         service, file_id, extra_fields="name, owners"
     )
     file_id = resolved_file_id
@@ -2309,7 +2311,7 @@ async def copy_drive_file(
     file_id = resolved_file_id
     original_name = file_metadata.get("name", "Unknown File")
 
-    resolved_folder_id = await resolve_folder_id(service, parent_folder_id)
+    resolved_folder_id = await resolve_destination_folder_id(service, parent_folder_id)
 
     copy_body = {}
     if new_name:
@@ -2411,7 +2413,7 @@ async def set_drive_file_permissions(
             f"Invalid link_sharing '{link_sharing}'. Must be one of: {', '.join(sorted(valid_link_sharing))}"
         )
 
-    resolved_file_id, file_metadata = await resolve_drive_item(
+    resolved_file_id, file_metadata = await resolve_target_item(
         service, file_id, extra_fields="name, webViewLink"
     )
     file_id = resolved_file_id

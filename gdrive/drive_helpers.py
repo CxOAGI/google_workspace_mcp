@@ -5,8 +5,11 @@ Shared utilities for Google Drive operations including permission checking.
 """
 
 import asyncio
+import logging
 import re
 from typing import List, Dict, Any, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 VALID_SHARE_ROLES = {"reader", "commenter", "writer"}
 VALID_SHARE_TYPES = {"user", "group", "domain", "anyone"}
@@ -364,26 +367,147 @@ async def resolve_drive_item(
         current_id = target_id
 
 
+def _should_soften_drive_file_error(error) -> bool:
+    """
+    Decide whether a Drive ``HttpError`` from a pre-flight ``files.get`` should be
+    tolerated (softened) rather than propagated.
+
+    This is the single gate behind the ``drive.file`` picker asymmetry: when a
+    user selects a file/folder via the Google Picker, the grant lets the app
+    operate on it (create-in-folder, share, update, reparent), yet a direct
+    ``files.get`` can still return 404 - notably for picked folders. The
+    pre-flight read therefore blocks operations Google would actually allow.
+
+    Returns True only in ``drive.file`` ("file") mode for a not-connected read
+    failure. In file mode the ONLY cause of a 404 on a picked-resource pre-flight
+    is an ID that was never granted to the app, so we soften on **any** 404
+    (regardless of the - sometimes terse or localized - reason text) plus the
+    file-level 403 case. In full-drive mode nothing is softened: a 404/403 there
+    is a genuine error and must propagate unchanged.
+    """
+    from auth.scopes import is_full_drive_access
+    from core.utils import _is_file_not_connected_error
+
+    if is_full_drive_access():
+        return False
+    status = error.resp.status
+    if status == 404:
+        return True
+    if status == 403:
+        return _is_file_not_connected_error(403, str(error))
+    return False
+
+
 async def resolve_folder_id(
     service,
     folder_id: str,
     *,
     max_depth: int = 5,
+    strict: bool = False,
 ) -> str:
     """
-    Resolve a folder ID that might be a shortcut and ensure the final target is a folder.
+    Resolve a folder ID (possibly a shortcut) and ensure the target is a folder.
+
+    Tolerant of the documented ``drive.file`` picker asymmetry by default: when a
+    folder is selected via the Google Picker the grant lets the app create/list/
+    operate within it, yet a direct ``files.get`` on the folder 404s. On such a
+    not-connected failure in ``file`` mode this falls back to the raw
+    ``folder_id`` (shortcut resolution and the folder-type assertion are skipped -
+    a picked folder is the real folder, not a shortcut, and the subsequent
+    operation will return Google's authoritative result).
+
+    Pass ``strict=True`` when a successful, validated folder read is genuinely
+    required. In full-drive mode the fallback never fires (a 404/403 is a real
+    error), so behavior there is identical to a strict read.
     """
-    resolved_id, metadata = await resolve_drive_item(
-        service,
-        folder_id,
-        max_depth=max_depth,
-    )
+    if folder_id == "root":
+        return folder_id
+
+    from googleapiclient.errors import HttpError
+
+    try:
+        resolved_id, metadata = await resolve_drive_item(
+            service,
+            folder_id,
+            max_depth=max_depth,
+        )
+    except HttpError as error:
+        if strict or not _should_soften_drive_file_error(error):
+            raise
+        logger.info(
+            "[resolve_folder_id] files.get on folder '%s' returned %s under "
+            "drive.file; using the raw ID (a picker grant permits operating "
+            "within the folder even when get-folder is denied).",
+            folder_id,
+            error.resp.status,
+        )
+        return folder_id
+
     mime_type = metadata.get("mimeType")
     if mime_type != FOLDER_MIME_TYPE:
         raise Exception(
             f"Resolved ID '{resolved_id}' (from '{folder_id}') is not a folder; mimeType={mime_type}."
         )
     return resolved_id
+
+
+async def resolve_destination_folder_id(
+    service,
+    folder_id: str,
+    *,
+    max_depth: int = 5,
+) -> str:
+    """
+    Resolve a *destination* folder for a create / move / copy operation.
+
+    Thin alias for the (now tolerant by default) :func:`resolve_folder_id`. Kept
+    as a named entry point so create/move/copy call sites read intentionally.
+    """
+    return await resolve_folder_id(service, folder_id, max_depth=max_depth)
+
+
+async def resolve_target_item(
+    service,
+    file_id: str,
+    *,
+    extra_fields: Optional[str] = None,
+    max_depth: int = 5,
+    strict: bool = False,
+) -> Tuple[str, Dict[str, Any]]:
+    """
+    Resolve an item being OPERATED ON by ID (a file OR folder), returning
+    ``(resolved_id, metadata)``.
+
+    Like :func:`resolve_drive_item`, but tolerant of the ``drive.file`` picker
+    asymmetry. A picked FILE's ``files.get`` succeeds; a picked FOLDER's
+    ``files.get`` 404s even though the picker grant permits operating on it
+    (``permissions.*``, ``files.update``, reparenting, ...). On a not-connected
+    read failure in ``file`` mode (and ``strict=False``) this falls back to
+    ``(file_id, {})`` - the raw ID with no pre-fetched metadata - so the caller
+    proceeds against the granted ID and lets the real API call return Google's
+    authoritative result. Callers must read metadata defensively
+    (``metadata.get(..., default)``), since it may be empty on the fallback path.
+
+    Pass ``strict=True`` (or run in full-drive mode) to require a successful read;
+    there the behavior is identical to :func:`resolve_drive_item`.
+    """
+    from googleapiclient.errors import HttpError
+
+    try:
+        return await resolve_drive_item(
+            service, file_id, extra_fields=extra_fields, max_depth=max_depth
+        )
+    except HttpError as error:
+        if strict or not _should_soften_drive_file_error(error):
+            raise
+        logger.info(
+            "[resolve_target_item] files.get on '%s' returned %s under "
+            "drive.file; operating on the raw ID with no pre-fetched metadata "
+            "(a picker grant permits the operation even when get is denied).",
+            file_id,
+            error.resp.status,
+        )
+        return file_id, {}
 
 
 async def move_file_to_folder(
@@ -399,7 +523,9 @@ async def move_file_to_folder(
     Valid under the drive.file scope: the app created the file and the folder is
     a granted ID. Returns the resolved destination folder ID.
     """
-    resolved_parent = await resolve_folder_id(drive_service, parent_folder_id)
+    resolved_parent = await resolve_destination_folder_id(
+        drive_service, parent_folder_id
+    )
 
     current = await asyncio.to_thread(
         drive_service.files()
