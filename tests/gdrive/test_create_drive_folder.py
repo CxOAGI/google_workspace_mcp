@@ -36,7 +36,7 @@ async def test_create_folder_root_skips_resolve():
     service = _make_service(api_response)
 
     with patch(
-        "gdrive.drive_tools.resolve_folder_id",
+        "gdrive.drive_tools.resolve_destination_folder_id",
         new_callable=AsyncMock,
         return_value="root",
     ):
@@ -63,7 +63,7 @@ async def test_create_folder_custom_parent_resolves():
     service = _make_service(api_response)
 
     with patch(
-        "gdrive.drive_tools.resolve_folder_id",
+        "gdrive.drive_tools.resolve_destination_folder_id",
         new_callable=AsyncMock,
         return_value="resolved-parent-id",
     ) as mock_resolve:
@@ -100,7 +100,7 @@ async def test_create_folder_passes_correct_metadata():
     service = _make_service(api_response)
 
     with patch(
-        "gdrive.drive_tools.resolve_folder_id",
+        "gdrive.drive_tools.resolve_destination_folder_id",
         new_callable=AsyncMock,
         return_value="resolved-id",
     ):
@@ -132,7 +132,7 @@ async def test_create_folder_missing_webviewlink():
     service = _make_service(api_response)
 
     with patch(
-        "gdrive.drive_tools.resolve_folder_id",
+        "gdrive.drive_tools.resolve_destination_folder_id",
         new_callable=AsyncMock,
         return_value="root",
     ):

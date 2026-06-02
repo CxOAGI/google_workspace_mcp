@@ -374,7 +374,7 @@ async def test_create_drive_folder():
     mock_service.files.return_value.create.return_value = mock_request
 
     with patch(
-        "gdrive.drive_tools.resolve_folder_id",
+        "gdrive.drive_tools.resolve_destination_folder_id",
         new_callable=AsyncMock,
         return_value="root",
     ):
@@ -450,7 +450,7 @@ def test_build_params_order_by_omits_whitespace_only_values():
 
 
 @pytest.mark.asyncio
-@patch("gdrive.drive_tools.resolve_folder_id", new_callable=AsyncMock)
+@patch("gdrive.drive_tools.resolve_destination_folder_id", new_callable=AsyncMock)
 async def test_import_to_google_doc_upload_uses_google_api_retries(mock_resolve_folder):
     """Drive uploads use googleapiclient's built-in retry handling."""
     mock_resolve_folder.return_value = "resolved_root"
